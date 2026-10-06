@@ -1,0 +1,83 @@
+server:
+  port: 8081
+spring:
+  application:
+    name: xhw
+  datasource:
+    # 默认走本机 MySQL 8（库/账号由项目根目录的 init-mysql.bat 建好）。
+    #
+    # 想临时切回「零安装的内存库」加一个 profile 即可，不用改这里：
+    #     java -jar target/xhw-1.0-SNAPSHOT.jar --spring.profiles.active=h2
+    # 回归脚本（_qa/api_smoke.js、address_*）就是这么跑的 ——
+    # 它们会写库（建用户、发笔记、下秒杀单），跑在 MySQL 上会留一堆垃圾数据。
+    #
+    # url 里那个 allowPublicKeyRetrieval=true 不是多余参数：MySQL 8 默认用
+    # caching_sha2_password 认证，JDBC 首次握手要拿服务端公钥，
+    # 不加这一项会直接抛 "Public Key Retrieval is not allowed"。
+    # characterEncoding 也不能省——笔记标题里有 emoji，字符集错了就是乱码。
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/xhw?useSSL=false&serverTimezone=UTC&characterEncoding=utf8&allowPublicKeyRetrieval=true
+    username: ${DB_USER:xhw}
+    password: ${DB_PASSWORD:xhw123456}
+  jpa:
+    hibernate:
+      ddl-auto: none
+  redis:
+    host: ${REDIS_HOST:127.0.0.1}
+    port: ${REDIS_PORT:6379}
+    # 本机 Redis 若未设密码，留空即可；设了密码用环境变量 REDIS_PASSWORD 覆盖
+    password: ${REDIS_PASSWORD:}
+    lettuce:
+      pool:
+        max-active: 10
+        max-idle: 10
+        min-idle: 1
+        time-between-eviction-runs: 10s
+  jackson:
+    default-property-inclusion: non_null # JSON处理时忽略非空字段
+mybatis-plus:
+  type-aliases-package: com.xhw.entity # 别名扫描包
+logging:
+  level:
+    com.xhw: debug
+
+# 项目自定义配置
+xhw:
+  # 启动时自动把 tb_shop 全部写入 Redis（逻辑过期方案需要预热，
+  # 否则店铺详情接口会直接返回"店铺不存在"）。设为 false 可关闭。
+  preheat-shop-cache: true
+  # 启动时把 tb_seckill_voucher 的库存写入 Redis（seckill:stock:{id}）。
+  # seckill.lua 第一步就依赖这个键，缺失时会报
+  # "attempt to compare nil with number"，秒杀接口直接 500。
+  preheat-seckill-stock: true
+  # 启动时把 tb_shop 的经纬度写入 Redis GEO（shop:geo:{typeId}）。
+  # /shop/of/type 带坐标时走 GEO 分支，没有这份数据会 500（详见 ShopGeoPreheat）。
+  preheat-shop-geo: true
+  # 图片上传落盘目录，必须指向 nginx web 根目录下的 imgs/。
+  # 课程源码里硬编码的是作者本机路径，换机器就失效。
+  upload-dir: D:/xhw/nginx-1.18.0/html/xhw/imgs
+  # ────────────────────────────────────────────────────────────
+  # 门店 / 发券的**写**接口，默认关闭。
+  #
+  # 为什么关：tb_shop 表里没有 owner_id，tb_user 表里没有 role，
+  # 也就是说系统里根本没有"谁有权改这家店"这个信息。
+  # 于是 POST /shop、PUT /shop 就是**任何登录用户都能新建/改任意一家店** ——
+  # 带个 {"id":1,"name":"我改了别人的店"} 就成功了。这是水平越权，不是功能缺失。
+  # 课程原版就这样，因为原版也没有管理端。
+  #
+  # 为什么用开关而不是删掉：留个口子，等真的做了管理端（给 tb_shop 加 owner_id、
+  # 给 tb_user 加 role）之后，把这里打开就能继续用，不用重新写。
+  #
+  # ⚠️ 打开之前必须先补上 owner 校验，否则就是把漏洞开关打开。
+  shop-write-enabled: false
+  voucher-write-enabled: false
+  # 【仅本地开发】打开后，GET /user/code/dev?phone=xxx 会直接把验证码返回给前端，
+  # 登录页点完「获取验证码」就能自动显示并填入，不用再去控制台/Redis 里翻。
+  # ⚠️ 这是个后门（等于把验证码白送），部署到别人能访问的环境前必须改成 false。
+  # 关掉之后登录页会自动退回「去后端控制台看验证码」的提示，功能不受影响。
+  dev-login-code: true
+  # 【仅本地开发】打开后跳过短信限流，同一个手机号可以**无限次**取码，每次点
+  # 「获取验证码」都会生成一个新的验证码，不会再被"不足1分钟"拦住。
+  # 关掉即恢复原版行为：1 分钟 1 条、5 分钟 5 条，超了升一级（5 分钟）/二级（20 分钟）限制。
+  # ⚠️ 线上必须 false，否则发短信接口会被刷爆。
+  dev-skip-sms-limit: true

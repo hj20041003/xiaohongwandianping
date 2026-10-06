@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>店铺详情 · 小红碗</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="hd">
+    <button class="hd__btn" type="button" @click="goBack" aria-label="返回">
+      <tk-icon name="back" :size="20"></tk-icon>
+    </button>
+    <h1 class="hd__t ellip">{{ shop.name || "店铺详情" }}</h1>
+    <span class="hd__spacer"></span>
+  </header>
+
+  <!-- ⚠️ 这里必须有 <main class="main"> 包着。
+       底部导航 .tk-ft 是 position: fixed，而 .main 带
+       padding-bottom: calc(var(--ft) + 28px)，专门给底栏让出高度。
+       这个页面原来**没有** main 容器（其他 14 个页面都有），
+       于是最后一个元素被底栏永久盖住 —— 滚到底也露不出来。
+       原来被盖住的正是最后一张代金券卡片的底部（「到店核销」+「怎么用」）。 -->
+  <main class="main">
+
+  <template v-if="loaded">
+
+    <div class="head-box">
+      <h2 class="head-box__t">{{ shop.name }}</h2>
+      <div class="head-box__meta">
+        <tk-stars :score="shop.score" show-score></tk-stars>
+        <span class="sep">·</span>
+        <span><span class="num">{{ shop.comments || 0 }}</span> 条评价</span>
+        <span class="sep">·</span>
+        <span>人均 <span class="num">{{ shop.avgPrice }}</span> 元</span>
+      </div>
+    </div>
+
+
+    <section class="sec">
+      <div class="kv">
+        <span class="kv__ic"><tk-icon name="pin" :size="16"></tk-icon></span>
+        <span class="kv__v">{{ cityLine }} · {{ shop.address }}</span>
+      </div>
+      <div class="kv">
+        <span class="kv__ic"><tk-icon name="clock" :size="16"></tk-icon></span>
+        <span class="kv__v">营业时间 {{ shop.openHours || "以门店为准" }}</span>
+      </div>
+    </section>
+
+    <!-- ================= 代金券：撕票票根 ================= -->
+    <section class="sec" v-if="vouchers.length">
+      <div class="sec__hd">
+        <h2 class="sec__t">代金券</h2>
+        <span class="masthead__r num">{{ vouchers.length }} 张在售</span>
+      </div>
+    </section>
+
+    <div class="vch-list tk-in" v-if="vouchers.length">
+      <div class="tkt" v-for="v in vouchers" :key="v.id" :class="{ 'tkt--dim': isEnd(v) }">
+
+        <!-- 撕口上的两个齿孔 -->
+        <span class="tkt__punch tkt__punch--t"></span>
+        <span class="tkt__punch tkt__punch--b"></span>
+
+        <div class="tkt__body">
+          <span class="seal" v-if="v.type && !isEnd(v)">限时</span>
+          <div class="tkt__t">{{ v.title }}</div>
+          <div class="tkt__sub">{{ v.subTitle || v.rules }}</div>
+
+          <div class="tkt__price">
+            <span class="tkt__sym">￥</span>
+            <span class="tkt__amt num">{{ price(v).int }}</span>
+            <span class="tkt__dec num">{{ price(v).dec }}</span>
+            <template v-if="v.actualValue > v.payValue">
+              <span class="tkt__was num">￥{{ util.money(v.actualValue) }}</span>
+              <span class="tkt__off num" v-if="off(v)">{{ off(v) }}</span>
+            </template>
+          </div>
+
+          <div class="tkt__cd" v-if="v.type && !isEnd(v)">
+            <tk-icon name="clock" :size="12"></tk-icon>
+            <template v-if="isNotBegin(v)"><span class="num">{{ countdown(v) }}</span> 后开抢</template>
+            <template v-else>距结束 <span class="num">{{ countdown(v) }}</span></template>
+          </div>
+          <div class="tkt__cd" v-else-if="v.type" style="background:transparent;border-style:dashed">
+            本场已结束
+          </div>
+        </div>
+
+        <div class="tkt__stub">
+          <div class="tkt__stock" v-if="v.type" :class="{ 'is-out': !(v.stock > 0) }">
+            剩余 <span class="num">{{ v.stock || 0 }}</span> 张
+          </div>
+          <div class="tkt__stock" v-else>到店核销</div>
+
+          <button v-if="v.type" class="btn btn--p btn--sm btn--full" type="button"
+                  :disabled="isOff(v) || buying" @click="seckill(v)">
+            {{ !(v.stock > 0) ? "已抢完" : isNotBegin(v) ? "未开始" : isEnd(v) ? "已结束" : "抢购" }}
+          </button>
+          <button v-else class="btn btn--g btn--sm btn--full" type="button" @click="offlineTips">
+            怎么用
+          </button>
+
+          <div class="tkt__no num">{{ util.no(v.id, 4) }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="empty" v-else>
+      <div class="empty__ic"><tk-icon name="ticket" :size="24"></tk-icon></div>
+      <div class="empty__t">这家店还没有代金券</div>
+      <div class="empty__d">有新券上线会出现在这里</div>
+    </div>
+
+    <!-- 门店图片放在券后面。
+         原来的顺序是「店名 -> 大图 -> 地址 -> 券」，一张 60vh 的图 +
+         地址信息就把首屏占满了，而这个页面**主要动作是买券** ——
+         结果券被挤到 630px 以下，小屏上根本看不到（用户反馈过"看不到完整的代金券"）。
+         图集是参考资料不是目的，挪到后面；地址属于"我在哪"，跟着店名走。 -->
+    <section class="sec">
+      <div class="sec__hd">
+        <h2 class="sec__t">门店图片</h2>
+        <span class="masthead__r num" v-if="images.length">{{ images.length }} 张</span>
+      </div>
+    </section>
+
+    <tk-gallery :images="images" :label="shop.name"></tk-gallery>
+
+  </template>
+
+  <template v-else>
+    <!-- 骨架的顺序要和真实内容一致（店名 -> 地址 -> 券），
+         否则加载完会看到明显的一次跳动 -->
+    <div class="pad">
+      <div class="sk sk--line" style="width:60%;height:26px"></div>
+      <div class="sk sk--line" style="margin-top:10px;width:45%"></div>
+      <div class="sk sk--line" style="margin-top:22px;width:38%;height:20px"></div>
+      <div class="sk sk--ph" style="margin-top:14px;height:120px;border-radius:4px"></div>
+    </div>
+  </template>
+
+  </main>
+
+  <foot-bar :active-btn="0"></foot-bar>
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+new Vue({
+  el: "#app",
+  data: {
+    util: util,
+    loaded: false,
+    shop: {},
+    images: [],
+    vouchers: [],
+    buying: false,
+    now: Date.now(),
+    timer: null
+  },
+
+  created: function () {
+    var id = util.param("id");
+    if (!id) {
+      this.$message.error("缺少店铺 id");
+      setTimeout(function () { util.go("/index.html"); }, 600);
+      return;
+    }
+    this.queryShop(id);
+    this.queryVouchers(id);
+  },
+
+  computed: {
+    /* 「杭州 · 拱墅区」这样的二级地址行。
+       原来只有商圈，不加城市的话从「全国」列表点进一家北京的店，
+       光看「三里屯」并不知道是哪座城的。 */
+    cityLine: function () {
+      var parts = [];
+      if (this.shop.province) parts.push(this.shop.province);
+      if (this.shop.city) parts.push(this.shop.city);
+      if (this.shop.district) parts.push(this.shop.district);
+      if (this.shop.area) parts.push(this.shop.area);
+      return parts.join(" · ");
+    }
+  },
+
+  beforeDestroy: function () {
+    if (this.timer) clearInterval(this.timer);
+  },
+
+  methods: {
+    goBack: function () { util.back(); },
+
+    queryShop: function (id) {
+      var self = this;
+      axios.get("/shop/" + id)
+        .then(function (res) {
+          var s = res.data || {};
+          self.shop = s;
+          self.images = util.splitImages(s.images);
+          self.loaded = true;
+        })
+        .catch(function (e) { self.$message.error(e); self.loaded = true; });
+    },
+
+    queryVouchers: function (id) {
+      var self = this;
+      var shopId = id || util.param("id");
+      return axios.get("/voucher/list/" + shopId)
+        .then(function (res) {
+          self.vouchers = res.data || [];
+          self.startClock();
+        })
+        .catch(function (e) { self.$message.error(e); });
+    },
+
+    /* 只在真的有时效券在跑的时候才开秒表，避免无谓的每秒重渲染 */
+    startClock: function () {
+      var self = this;
+      var need = this.vouchers.some(function (v) {
+        return v.type && !self.isEnd(v);
+      });
+      if (!need || this.timer) return;
+      this.timer = setInterval(function () { self.now = Date.now(); }, 1000);
+    },
+
+    price: function (v) { return util.moneyParts(v.payValue); },
+
+    off: function (v) {
+      if (!v.payValue || !v.actualValue) return "";
+      var d = (v.payValue * 10) / v.actualValue;
+      if (!isFinite(d) || d >= 10 || d <= 0) return "";
+      return (Math.round(d * 10) / 10) + "折";
+    },
+
+    isNotBegin: function (v) {
+      var t = util.parse(v.beginTime);
+      return t ? t.getTime() > this.now : false;
+    },
+    isEnd: function (v) {
+      var t = util.parse(v.endTime);
+      return t ? t.getTime() < this.now : false;
+    },
+    countdown: function (v) {
+      var t = util.parse(this.isNotBegin(v) ? v.beginTime : v.endTime);
+      if (!t) return "--:--:--";
+      return util.clock((t.getTime() - this.now) / 1000);
+    },
+    isOff: function (v) {
+      return this.isNotBegin(v) || this.isEnd(v) || !(v.stock > 0);
+    },
+
+    /* 这张券能被抢到的前提：登录 + 在时间内 + 有库存。
+       三者都满足了才发请求，省得白跑一趟再弹个错。 */
+    seckill: function (v) {
+      if (!util.requireLogin()) return;
+      if (this.isNotBegin(v)) { this.$message.error("还没到开抢时间"); return; }
+      if (this.isEnd(v)) { this.$message.error("这一场已经结束了"); return; }
+      if (!(v.stock > 0)) { this.$message.error("已经抢完了，等下一场"); return; }
+      if (this.buying) return;
+
+      var self = this;
+      this.buying = true;
+      axios.post("/voucher-order/seckill/" + v.id)
+        .then(function (res) {
+          self.$message.success("抢到了，订单号 " + res.data);
+          // 抢完立刻拉一次库存，不然票根上的数字还是旧的
+          return self.queryVouchers(v.shopId);
+        })
+        .catch(this.$message.error)
+        .then(function () { self.buying = false; });
+    },
+
+    offlineTips: function () {
+      this.$message.info("这张券到店直接核销，线上没有下单接口");
+    }
+  }
+});
+</script>
+</body>
+</html>

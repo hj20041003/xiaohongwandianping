@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>地址簿 · 小红碗</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="hd">
+    <button class="hd__btn" type="button" @click="goBack" aria-label="返回">
+      <tk-icon name="back" :size="20"></tk-icon>
+    </button>
+    <h1 class="hd__t">地址簿</h1>
+    <a v-if="tab === '1'" class="hd__btn" href="/address-edit.html" aria-label="新增地址">
+      <tk-icon name="plus" :size="20"></tk-icon>
+    </a>
+    <span v-else class="hd__spacer"></span>
+  </header>
+
+  <!-- ⚠️ 这一层 <main class="main"> 不能省：
+       底部导航 .tk-ft 是 position: fixed，而 .main 带
+       padding-bottom: calc(var(--ft) + 28px)，专门给底栏让出高度。
+       少了它，页面最后一个元素会被底栏永久盖住（滚到底也露不出来）。_qa/html_lint.py 会检查。 -->
+  <main class="main">
+
+  <!-- 一本地址簿里装两种地址：我自己的收货地址，和全国的门店地址。
+       两者权限模型完全不同——前者私有、按 user_id 隔离，后者公开，所以分成两栏。 -->
+  <div class="tabs">
+    <button class="tabs__i" type="button" :class="{ on: tab === '1' }" @click="tab = '1'">
+      我的地址
+    </button>
+    <button class="tabs__i" type="button" :class="{ on: tab === '2' }" @click="switchTab('2')">
+      门店地址
+    </button>
+  </div>
+
+  <!-- ============================ 我的收货地址 ============================ -->
+  <div v-show="tab === '1'">
+    <div class="addrs tk-in" v-if="addresses.length">
+      <article class="addr" v-for="a in addresses" :key="a.id"
+               :class="{ 'addr--def': a.isDefault === 1 }">
+        <div class="addr__bd">
+          <div class="addr__t">
+            <span class="addr__nm ellip">{{ a.name }}</span>
+            <!-- 「默认」和标签是两个维度的信息（默认是状态，家/公司是分类），
+                 不能二选一。原来写成 v-if / v-else，结果默认地址的标签直接被
+                 吞掉了 —— 用户把一条地址设成默认，上面写的"公司"就凭空消失了。 -->
+            <span class="atag atag--def" v-if="a.isDefault === 1">默认</span>
+            <span class="atag">{{ tagText(a.tag) }}</span>
+            <span class="addr__ph num">{{ a.phone }}</span>
+          </div>
+          <div class="addr__loc">
+            <tk-icon name="pin" :size="13"></tk-icon>
+            <span>{{ addrLoc(a) }}</span>
+          </div>
+          <div class="addr__foot">
+            <button class="addr__act" type="button" v-if="a.isDefault !== 1"
+                    @click="setDefault(a)">设为默认</button>
+            <span class="faint t-sm" v-else>下单默认用这条</span>
+            <span class="addr__sp"></span>
+            <a class="addr__act" :href="'/address-edit.html?id=' + a.id">编辑</a>
+            <button class="addr__act addr__act--del" type="button"
+                    @click="askDelete(a)">删除</button>
+          </div>
+        </div>
+      </article>
+
+      <a class="addr-add" href="/address-edit.html">
+        <tk-icon name="plus" :size="15"></tk-icon>新增地址
+      </a>
+    </div>
+
+    <div class="empty" v-else-if="loaded">
+      <div class="empty__ic"><tk-icon name="pin" :size="24"></tk-icon></div>
+      <div class="empty__t">地址簿还是空的</div>
+      <div class="empty__d">添一条收货地址，第一条会自动成为默认地址</div>
+      <div class="empty__act">
+        <a class="btn btn--p btn--sm" href="/address-edit.html">新增地址</a>
+      </div>
+    </div>
+
+    <div class="addrs" v-else>
+      <div class="addr" v-for="i in 2" :key="i">
+        <div class="addr__bd">
+          <div class="sk sk--line" style="width:45%"></div>
+          <div class="sk sk--line" style="width:80%;margin-top:10px"></div>
+          <div class="sk sk--line" style="width:30%;margin-top:10px"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================== 门店地址 ============================== -->
+  <!-- 这一栏和顶部城市选择器无关，永远是全国：它的用途是"找地方"，
+       不是"看附近"。要按城市逛店，首页和店铺列表页已经做过了。 -->
+  <div v-show="tab === '2'">
+    <div class="pad" style="padding-bottom:0">
+      <div class="search">
+        <span class="search__ico"><tk-icon name="search" :size="16"></tk-icon></span>
+        <input v-model.trim="kw" placeholder="搜全国门店，比如「火锅」" aria-label="搜索门店">
+      </div>
+    </div>
+
+    <div v-if="filtered.length">
+      <section class="dir" v-for="c in filtered" :key="c.name">
+        <div class="dir__hd">
+          <span class="dir__city">{{ c.name }}</span>
+          <span class="dir__n"><span class="num">{{ c.shops.length }}</span> 家门店</span>
+        </div>
+        <div class="dir__list">
+          <div class="pick" v-for="s in c.shops" :key="s.id" @click="toShop(s.id)">
+            <span class="pick__ic">
+              <img :src="imgOf(typeIcon(s.typeId))" :alt="typeName(s.typeId)" loading="lazy">
+            </span>
+            <span class="pick__bd">
+              <span class="pick__t ellip">{{ s.name }}</span>
+              <span class="pick__s ellip">{{ s.area }} · {{ s.address }}</span>
+            </span>
+            <tk-icon name="right" :size="15"></tk-icon>
+          </div>
+        </div>
+      </section>
+      <div class="dir__tail">
+        全国共 <span class="num">{{ shopTotal }}</span> 家门店，按城市归档
+      </div>
+    </div>
+
+    <div class="empty" v-else-if="dirLoaded">
+      <div class="empty__ic"><tk-icon name="compass" :size="24"></tk-icon></div>
+      <div class="empty__t">没搜到这家店</div>
+      <div class="empty__d">换个关键词，比如「火锅」「烤鸭」「早茶」</div>
+      <div class="empty__act">
+        <button class="btn btn--g btn--sm" type="button" @click="kw = ''">清空关键词</button>
+      </div>
+    </div>
+
+    <div class="dir" v-else>
+      <div class="pick" v-for="i in 6" :key="i">
+        <div class="sk" style="flex:0 0 28px;width:28px;height:28px;border-radius:3px"></div>
+        <div class="pick__bd">
+          <div class="sk sk--line" style="width:60%"></div>
+          <div class="sk sk--line" style="width:85%;margin-top:6px"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 删除确认。不用 window.confirm：① 长得和整站风格不搭；
+       ② 它在无头环境里默认返回 falsy，端到端测试根本点不到"确认"这一步。 -->
+  <template v-if="confirming">
+    <div class="mask" @click="confirming = null"></div>
+    <div class="sheet" role="dialog" aria-label="确认删除">
+      <div class="sheet__hd">
+        <span class="sheet__t">删掉这条地址？</span>
+        <button class="hd__btn" type="button" @click="confirming = null" aria-label="关闭">
+          <tk-icon name="close" :size="18"></tk-icon>
+        </button>
+      </div>
+      <div class="sheet__bd">
+        <div class="pad" style="padding:16px 16px 12px">
+          <div class="t-sm" style="font-weight:700">{{ confirming.name }} · {{ confirming.phone }}</div>
+          <div class="t-sm muted" style="margin-top:6px">{{ addrLoc(confirming) }}</div>
+          <div class="t-sm faint" style="margin-top:12px">
+            删掉之后没法恢复。要是删的是默认地址，系统会从剩下的里自动补一条。
+          </div>
+        </div>
+        <div class="pad" style="padding:0 16px 16px;display:flex;gap:10px">
+          <button class="btn btn--g btn--sm" type="button" style="flex:1"
+                  @click="confirming = null">再想想</button>
+          <button class="btn btn--p btn--sm" type="button" style="flex:1"
+                  :disabled="deleting" @click="doDelete">
+            {{ deleting ? "删除中…" : "删除" }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  </main>
+
+  <foot-bar :active-btn="4"></foot-bar>
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+var TAGS = ["家", "公司", "学校", "其他"];
+
+new Vue({
+  el: "#app",
+  data: {
+    tab: "1",
+    addresses: [],
+    loaded: false,
+    // 「门店地址」那一栏：一次拿全，前端折叠 + 本地搜索
+    directory: [],
+    types: [],
+    kw: "",
+    dirLoaded: false,
+    confirming: null,
+    deleting: false
+  },
+
+  computed: {
+    /* 门店搜索是纯前端的：数据已经全在手里（见 /shop/directory 的设计说明），
+       再为每次输入去发请求没必要。空城市会在这里被过滤掉，
+       否则搜"火锅"会留下一堆"XX（0 家门店）"的空标题。 */
+    filtered: function () {
+      var q = (this.kw || "").trim().toLowerCase();
+      var out = [];
+      this.directory.forEach(function (c) {
+        var shops = (c.shops || []).filter(function (s) {
+          if (!q) return true;
+          return (s.name || "").toLowerCase().indexOf(q) !== -1 ||
+                 (s.area || "").toLowerCase().indexOf(q) !== -1 ||
+                 (s.address || "").toLowerCase().indexOf(q) !== -1;
+        });
+        if (shops.length) out.push({ name: c.name, shops: shops });
+      });
+      return out;
+    },
+    shopTotal: function () {
+      return this.directory.reduce(function (a, c) { return a + (c.shops || []).length; }, 0);
+    }
+  },
+
+  created: function () {
+    this.queryMine();
+  },
+
+  methods: {
+    goBack: function () { util.back(); },
+    imgOf: function (p) { return util.imgPath(p); },
+    toShop: function (id) { util.go("/shop-detail.html?id=" + id); },
+
+    /* 省 · 市 · 区 · 详细地址。区是独立字段（表单里单独选的），
+       不拼进来的话卡片上就少了这一级信息 */
+    addrLoc: function (a) {
+      return [a.province, a.city, a.district, a.detail].filter(Boolean).join(" · ");
+    },
+
+    tagText: function (t) {
+      var i = Number(t);
+      return TAGS[i] || TAGS[3];
+    },
+
+    typeName: function (id) {
+      var hit = this.types.filter(function (t) { return t.id === id; })[0];
+      return hit ? hit.name : "门店";
+    },
+    typeIcon: function (id) {
+      var hit = this.types.filter(function (t) { return t.id === id; })[0];
+      return hit ? hit.icon : "/imgs/icons/default-icon.png";
+    },
+
+    switchTab: function (t) {
+      this.tab = t;
+      if (t === "2" && !this.dirLoaded) {
+        this.queryDirectory();
+      }
+    },
+
+    /* --------------------------------------------------------- 我的地址 */
+
+    queryMine: function () {
+      var self = this;
+      return axios.get("/address/list")
+        .then(function (res) {
+          self.addresses = res.data || [];
+          self.loaded = true;
+        })
+        .catch(function (e) {
+          // 401 会被拦截器送去登录页，这里只管其它错误
+          self.loaded = true;
+          self.$message.error(e);
+        });
+    },
+
+    setDefault: function (a) {
+      var self = this;
+      axios.put("/address/" + a.id + "/default")
+        .then(function () {
+          self.$message.success("已设为默认地址");
+          // 重新拉一次而不是本地改标记：排序规则（默认置顶）在服务端，
+          // 本地改完顺序会和后端不一致
+          return self.queryMine();
+        })
+        .catch(this.$message.error);
+    },
+
+    askDelete: function (a) {
+      this.confirming = a;
+    },
+
+    doDelete: function () {
+      if (!this.confirming || this.deleting) return;
+      var self = this;
+      var id = this.confirming.id;
+      this.deleting = true;
+      axios.delete("/address/" + id)
+        .then(function () {
+          self.confirming = null;
+          self.$message.success("已删除");
+          return self.queryMine();
+        })
+        .catch(this.$message.error)
+        .then(function () { self.deleting = false; });
+    },
+
+    /* --------------------------------------------------------- 门店地址 */
+
+    queryDirectory: function () {
+      var self = this;
+      return Promise.all([
+        axios.get("/shop/directory"),
+        this.types.length ? Promise.resolve() : axios.get("/shop-type/list")
+      ])
+        .then(function (res) {
+          self.directory = res[0].data || [];
+          if (res[1] && res[1].data) self.types = res[1].data || [];
+          self.dirLoaded = true;
+        })
+        .catch(function (e) {
+          self.dirLoaded = true;
+          self.$message.error(e);
+        });
+    }
+  }
+});
+</script>
+</body>
+</html>

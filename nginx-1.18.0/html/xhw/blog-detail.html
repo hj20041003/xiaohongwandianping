@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>笔记详情 · 小红碗</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="hd">
+    <button class="hd__btn" type="button" @click="goBack" aria-label="返回">
+      <tk-icon name="back" :size="20"></tk-icon>
+    </button>
+    <h1 class="hd__t">探店笔记</h1>
+    <span class="hd__spacer"></span>
+  </header>
+
+  <!-- 后端的 GET /blog/{id} 要求登录（拦截器只放行了 /blog/hot），
+       未登录时直说，别闪一个空页面再跳走。 -->
+  <main class="main" v-if="needLogin">
+    <div class="empty">
+      <div class="empty__ic"><tk-icon name="lock" :size="24"></tk-icon></div>
+      <div class="empty__t">登录后才能看这篇笔记</div>
+      <div class="empty__d">笔记详情接口需要登录，不是笔记被删了</div>
+      <div class="empty__act">
+        <a class="btn btn--p btn--sm" :href="loginHref">去登录</a>
+      </div>
+    </div>
+  </main>
+
+  <main class="main" v-else-if="loaded">
+
+    <tk-gallery :images="images" :label="blog.title"></tk-gallery>
+
+    <div class="prof">
+      <a class="av av--lg" :href="authorHref" :aria-label="blog.name + ' 的主页'">
+        <img :src="blog.icon" :alt="blog.name">
+      </a>
+      <div class="prof__bd">
+        <div class="prof__nm">{{ blog.name }}</div>
+        <div class="prof__id num">{{ util.ago(blog.createTime) }}</div>
+      </div>
+      <button v-if="canFollow" class="btn btn--s btn--sm prof__act" type="button" @click="toggleFollow">
+        {{ followed ? "已关注" : "关注" }}
+      </button>
+    </div>
+
+    <section class="sec" style="padding-top:0">
+      <h2 class="t-h1" style="margin-bottom:10px">{{ blog.title }}</h2>
+      <div class="prose" v-html="contentHtml"></div>
+    </section>
+
+    <section class="sec" v-if="shop.id">
+      <div class="sec__hd">
+        <h2 class="sec__t">笔记里的店</h2>
+      </div>
+      <a class="shop" :href="'/shop-detail.html?id=' + shop.id">
+        <span class="shop__ph"><img :src="shop.cover" :alt="shop.name" loading="lazy"></span>
+        <span class="shop__bd">
+          <span class="shop__t ellip">{{ shop.name }}</span>
+          <span class="shop__meta">
+            <tk-stars :score="shop.score" show-score></tk-stars>
+            <span class="sep">·</span>
+            <span>人均 <span class="num">{{ shop.avgPrice }}</span> 元</span>
+          </span>
+          <span class="shop__row">
+            <tk-icon name="pin" :size="13"></tk-icon>
+            <span class="ellip">{{ shop.province ? shop.province + " · " : "" }}{{ shop.city ? shop.city + " · " : "" }}{{ shop.area }}</span>
+          </span>
+        </span>
+      </a>
+    </section>
+
+    <section class="sec">
+      <div class="sec__hd">
+        <h2 class="sec__t">点赞的人</h2>
+        <span class="masthead__r num">{{ blog.liked || 0 }} 人</span>
+      </div>
+      <div class="likes">
+        <a class="av av--sm" v-for="u in likes" :key="u.id"
+           :href="'/other-info.html?id=' + u.id" :aria-label="u.nickName">
+          <img :src="util.iconUrl(u.icon)" :alt="u.nickName" loading="lazy">
+        </a>
+        <!-- 点赞数存在数据库里，点赞名单存在 Redis 的 ZSet 里。
+             Redis 一重启名单就空了，但计数还在，两个数字会打架。
+             所以按计数分情况说话，不硬说"你是第一个"。 -->
+        <span v-if="!likes.length" class="t-sm faint">
+          {{ (blog.liked || 0) > 0 ? "点赞名单存在 Redis，重启后会清空" : "还没有人点过赞，你是第一个？" }}
+        </span>
+      </div>
+    </section>
+
+    <!-- 评论区。原来这一块完全不存在：表有、实体有、Service 有，
+         但 BlogCommentsController 是个空壳（零接口），所以一直没接上。 -->
+    <section class="sec" id="comments">
+      <div class="sec__hd">
+        <h2 class="sec__t">评论</h2>
+        <span class="masthead__r num">{{ comments.length }} 条</span>
+      </div>
+
+      <div class="cmt-box">
+        <textarea class="txa cmt-box__ta" v-model="commentText" maxlength="200"
+                  ref="input" placeholder="说点什么…（最多 200 字）"></textarea>
+        <div class="cmt-box__f">
+          <span class="fld__n num">{{ (commentText || "").length }}/200</span>
+          <button class="btn btn--p btn--sm" type="button"
+                  :disabled="posting || !(commentText || '').trim()" @click="postComment">
+            {{ posting ? "发送中…" : "发送" }}
+          </button>
+        </div>
+      </div>
+
+      <div class="cmts" v-if="comments.length">
+        <article class="cmt" v-for="c in comments" :key="c.id">
+          <a class="av av--sm" :href="'/other-info.html?id=' + c.userId"
+             :aria-label="c.userName">
+            <img :src="util.iconUrl(c.userIcon)" :alt="c.userName" loading="lazy">
+          </a>
+          <div class="cmt__bd">
+            <div class="cmt__t">
+              <b class="ellip">{{ c.userName }}</b>
+              <span class="cmt__ago num">{{ util.ago(c.createTime) }}</span>
+            </div>
+            <div class="cmt__c">{{ c.content }}</div>
+          </div>
+          <!-- 只有自己的评论才给删除入口。服务端也按 (id, userId) 校验了一遍，
+               前端藏起来只是为了不误导，不是安全边界。 -->
+          <button class="cmt__del" type="button" v-if="c.mine"
+                  @click.stop="askDeleteComment(c)">删</button>
+        </article>
+      </div>
+      <div class="cmt-none t-sm faint" v-else>还没有评论，来说第一句</div>
+    </section>
+
+  </main>
+
+  <!-- 删评论的确认抽屉。不用 window.confirm：
+       风格不搭，而且它在无头环境里默认返回 falsy，端到端测试点不到"确认"。 -->
+  <template v-if="pendingDel">
+    <div class="mask" @click="pendingDel = null"></div>
+    <div class="sheet" role="dialog" aria-label="确认删除评论">
+      <div class="sheet__hd">
+        <span class="sheet__t">删掉这条评论？</span>
+        <button class="hd__btn" type="button" @click="pendingDel = null" aria-label="关闭">
+          <tk-icon name="close" :size="18"></tk-icon>
+        </button>
+      </div>
+      <div class="sheet__bd">
+        <div class="pad" style="padding:16px 16px 12px">
+          <div class="t-sm muted">{{ pendingDel.content }}</div>
+          <div class="t-sm faint" style="margin-top:12px">删掉之后没法恢复。</div>
+        </div>
+        <div class="pad" style="padding:0 16px 16px;display:flex;gap:10px">
+          <button class="btn btn--g btn--sm" type="button" style="flex:1"
+                  @click="pendingDel = null">再想想</button>
+          <button class="btn btn--p btn--sm" type="button" style="flex:1"
+                  :disabled="deleting" @click="doDeleteComment">
+            {{ deleting ? "删除中…" : "删除" }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <div class="pad" v-else>
+    <div class="sk sk--ph" style="border-radius:4px"></div>
+    <div class="sk sk--line" style="margin-top:16px;width:70%;height:20px"></div>
+    <div class="sk sk--line" style="margin-top:14px;width:95%"></div>
+    <div class="sk sk--line" style="margin-top:8px;width:88%"></div>
+  </div>
+
+  <!-- 底部操作条：点赞 / 评论 / 去店里 -->
+  <div class="bar" v-if="loaded && !needLogin">
+    <button class="btn btn--bk" type="button" @click="toggleLike"
+            :aria-label="blog.isLike ? '取消点赞' : '点赞'">
+      <tk-icon name="thumb" :size="19" :filled="!!blog.isLike"></tk-icon>
+      <span class="num" :style="blog.isLike ? 'color:var(--ticket)' : ''">{{ blog.liked || 0 }}</span>
+    </button>
+    <button class="btn btn--bk" type="button" @click="toggleFavorite"
+            :aria-label="favorited ? '取消收藏' : '收藏'"
+            :style="favorited ? 'color:var(--ticket)' : ''">
+      <tk-icon name="star" :size="19" :filled="favorited"></tk-icon>
+    </button>
+    <button class="btn btn--bk" type="button" @click="focusComment" aria-label="评论">
+      <tk-icon name="comment" :size="19"></tk-icon>
+      <span class="num">{{ comments.length || blog.comments || 0 }}</span>
+    </button>
+    <span class="bar__sp"></span>
+    <a v-if="shop.id" class="btn btn--p btn--sm" :href="'/shop-detail.html?id=' + shop.id">
+      去这家店
+    </a>
+  </div>
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+new Vue({
+  el: "#app",
+  data: {
+    util: util,
+    loaded: false,
+    needLogin: false,
+    blogId: "",
+    blog: {},
+    shop: {},
+    images: [],
+    likes: [],
+    me: {},
+    followed: false,
+    // 收藏（和点赞不同：收藏是显式开关，接口是 PUT / DELETE 两个，不是一个切换）
+    favorited: false,
+    favBusy: false,
+    // 评论
+    comments: [],
+    commentText: "",
+    posting: false,
+    deleting: false,
+    pendingDel: null
+  },
+
+  computed: {
+    contentHtml: function () {
+      // 正文一律走 util.rich（转义 + 分段），不再直接把原始内容塞进 v-html
+      return util.rich(this.blog.content);
+    },
+    canFollow: function () {
+      return !!(this.me.id && this.blog.userId && this.me.id !== this.blog.userId);
+    },
+    authorHref: function () {
+      if (!this.blog.userId) return "javascript:void(0)";
+      return this.me.id === this.blog.userId
+        ? "/info.html"
+        : "/other-info.html?id=" + this.blog.userId;
+    },
+    loginHref: function () {
+      return "/login.html?from=" +
+        encodeURIComponent("/blog-detail.html?id=" + this.blogId);
+    }
+  },
+
+  created: function () {
+    var id = util.param("id");
+    if (!id) {
+      this.$message.error("缺少笔记 id");
+      setTimeout(function () { util.go("/index.html"); }, 600);
+      return;
+    }
+    this.blogId = id;
+    this.queryBlog(id);
+  },
+
+  methods: {
+    goBack: function () { util.back(); },
+
+    queryBlog: function (id) {
+      var self = this;
+      // silent401：这个接口本来就要求登录，交给 needLogin 空状态处理，
+      // 不走拦截器的自动跳转，免得空页面闪一下再跳走
+      axios.get("/blog/" + id, { silent401: true })
+        .then(function (res) {
+          if (!res.data) {
+            self.$message.error("这篇笔记不存在");
+            self.loaded = true;
+            return;
+          }
+          var b = res.data || {};
+          b.icon = util.iconUrl(b.icon);
+          b.name = b.name || "匿名用户";
+          self.blog = b;
+          self.images = util.splitImages(b.images);
+          self.loaded = true;
+
+          self.queryLikes(b.id);
+          self.queryComments(b.id);
+          self.queryFavorite(b.id);
+          self.queryShop(b.shopId);
+          self.queryMe();
+        })
+        .catch(function (e) {
+          if (e === "请先登录" || !util.hasToken()) {
+            self.needLogin = true;
+          } else {
+            self.$message.error(e);
+          }
+          self.loaded = true;
+        });
+    },
+
+    queryShop: function (shopId) {
+      if (!shopId) return;
+      var self = this;
+      axios.get("/shop/" + shopId)
+        .then(function (res) {
+          var s = res.data || {};
+          s.cover = util.firstImage(s.images);
+          self.shop = s;
+        })
+        .catch(function () { /* 店铺拿不到不影响看笔记 */ });
+    },
+
+    queryLikes: function (id) {
+      var self = this;
+      axios.get("/blog/likes/" + id)
+        .then(function (res) { self.likes = res.data || []; })
+        .catch(function () {});
+    },
+
+    /* 未登录时 /user/me 会 401，拦截器会跳登录页。
+       但看笔记不该强制登录，所以这里吞掉错误。 */
+    queryMe: function () {
+      var self = this;
+      axios.get("/user/me", { silent401: true })
+        .then(function (res) {
+          self.me = res.data || {};
+          if (self.canFollow) self.queryFollowed();
+        })
+        .catch(function () {});
+    },
+
+    queryFollowed: function () {
+      var self = this;
+      axios.get("/follow/or/not/" + this.blog.userId)
+        .then(function (res) { self.followed = !!res.data; })
+        .catch(function () {});
+    },
+
+    toggleFollow: function () {
+      var self = this;
+      var next = !this.followed;
+      axios.put("/follow/" + this.blog.userId + "/" + next)
+        .then(function () {
+          self.followed = next;
+          self.$message.success(next ? "已关注" : "已取消关注");
+        })
+        .catch(this.$message.error);
+    },
+
+    toggleLike: function () {
+      var self = this;
+      axios.put("/blog/like/" + this.blog.id)
+        .then(function () { return axios.get("/blog/" + self.blog.id); })
+        .then(function (res) {
+          self.blog.liked = res.data.liked;
+          self.blog.isLike = res.data.isLike;
+          return self.queryLikes(self.blog.id);
+        })
+        .catch(this.$message.error);
+    },
+
+    /* ---------------------------------------------------------- 收藏 */
+
+    queryFavorite: function (id) {
+      var self = this;
+      // 拿不到不算错（未登录时这页本来就看不到），静默保持"未收藏"
+      return axios.get("/blog/" + id + "/favorite", { silent401: true })
+        .then(function (res) { self.favorited = res.data === true; })
+        .catch(function () { /* 状态查不到就当没收藏 */ });
+    },
+
+    toggleFavorite: function () {
+      if (this.favBusy) return;
+      var self = this;
+      var id = this.blogId;
+      var next = !this.favorited;
+      this.favBusy = true;
+      // 先切 UI 再发请求：收藏是纯开关、没有"库存"那种约束，
+      // 等接口回来再纠正反而显得卡
+      this.favorited = next;
+      var req = next
+        ? axios.put("/blog/" + id + "/favorite")
+        : axios.delete("/blog/" + id + "/favorite");
+      req.then(function () {
+        self.$message.success(next ? "已收藏" : "已取消收藏");
+      })
+        .catch(function (e) {
+          self.favorited = !next;      // 失败了要弹回去，不能让界面撒谎
+          self.$message.error(e);
+        })
+        .then(function () { self.favBusy = false; });
+    },
+
+    /* ---------------------------------------------------------- 评论 */
+
+    queryComments: function (id) {
+      var self = this;
+      // silent401 同上：没登录时看不了笔记正文，也就到不了这里
+      return axios.get("/blog-comments/" + id, { silent401: true })
+        .then(function (res) { self.comments = res.data || []; })
+        .catch(function () { /* 评论拉不到不影响看笔记 */ });
+    },
+
+    /** 底部那根"评论"按钮：滚到评论区并把光标放到输入框 */
+    focusComment: function () {
+      var el = document.getElementById("comments");
+      if (el && el.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      var self = this;
+      this.$nextTick(function () {
+        if (self.$refs.input) self.$refs.input.focus();
+      });
+    },
+
+    postComment: function () {
+      if (this.posting) return;
+      var text = (this.commentText || "").trim();
+      if (!text) { this.$message.error("先写点什么"); return; }
+      var self = this;
+      this.posting = true;
+      axios.post("/blog-comments", { blogId: Number(this.blogId), content: text })
+        .then(function () {
+          self.commentText = "";
+          self.$message.success("评论已发出");
+          return self.queryComments(self.blogId);
+        })
+        .catch(this.$message.error)
+        .then(function () { self.posting = false; });
+    },
+
+    askDeleteComment: function (c) { this.pendingDel = c; },
+
+    doDeleteComment: function () {
+      if (!this.pendingDel || this.deleting) return;
+      var self = this;
+      var id = this.pendingDel.id;
+      this.deleting = true;
+      axios.delete("/blog-comments/" + id)
+        .then(function () {
+          self.pendingDel = null;
+          self.$message.success("已删除");
+          return self.queryComments(self.blogId);
+        })
+        .catch(this.$message.error)
+        .then(function () { self.deleting = false; });
+    }
+  }
+});
+</script></body>
+</html>

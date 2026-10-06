@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>我的 · 小红碗</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="hd">
+    <span class="hd__spacer"></span>
+    <h1 class="hd__t">我的</h1>
+    <button class="hd__btn" type="button" @click="logout" aria-label="退出登录">
+      <tk-icon name="logout" :size="19"></tk-icon>
+    </button>
+  </header>
+
+  <main class="main">
+
+    <!-- 会员票夹头部 -->
+    <div class="prof">
+      <a class="av av--xl" href="/info-edit.html" aria-label="我的资料">
+        <img :src="iconUrl" :alt="user.nickName || '我的头像'">
+      </a>
+      <div class="prof__bd">
+        <div class="prof__nm ellip">{{ user.nickName || "…" }}</div>
+        <div class="prof__id num">{{ memberNo }}</div>
+        <div class="t-sm muted ellip" style="margin-top:5px">
+          {{ info.introduce || "还没有个人简介" }}
+        </div>
+      </div>
+      <a class="btn btn--g btn--sm prof__act" href="/info-edit.html">资料</a>
+    </div>
+
+    <section class="sec">
+      <div class="stats">
+        <div class="stat">
+          <div class="stat__n num">{{ blogs.length }}</div>
+          <div class="stat__l">笔记</div>
+        </div>
+        <div class="stat">
+          <div class="stat__n num">{{ likedTotal }}</div>
+          <div class="stat__l">获赞</div>
+        </div>
+        <div class="stat">
+          <div class="stat__n num">{{ info.followee || 0 }}</div>
+          <div class="stat__l">关注</div>
+        </div>
+        <div class="stat">
+          <div class="stat__n num">{{ info.fans || 0 }}</div>
+          <div class="stat__l">粉丝</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 签到：一周票根，已签的格子盖满 -->
+    <section class="sec">
+      <div class="sec__hd">
+        <h2 class="sec__t">签到</h2>
+        <span class="masthead__r">连续 <span class="num">{{ signCount }}</span> 天</span>
+      </div>
+      <div class="punch">
+        <div class="punch__c" v-for="(d, i) in week" :key="i"
+             :class="{ on: d.on, today: d.today }">
+          <span class="punch__w">{{ d.w }}</span>
+          <span class="punch__n num">{{ d.d }}</span>
+        </div>
+      </div>
+      <button class="btn btn--p btn--full" type="button"
+              style="margin-top:12px"
+              :disabled="signedToday || signing" @click="doSign">
+        {{ signedToday ? "今天已签到" : signing ? "签到中…" : "签到" }}
+      </button>
+    </section>
+
+    <!-- 地址簿：两种地址住在一起（我的收货地址 + 全国门店目录） -->
+    <section class="sec">
+      <div class="sec__hd"><h2 class="sec__t">我的服务</h2></div>
+      <div class="rows card">
+        <a class="row row--link" href="/favorite.html">
+          <tk-icon name="star" :size="17"></tk-icon>
+          <span class="row__k" style="color:var(--ink);font-weight:700">我的收藏</span>
+          <span class="row__v t-sm muted">收起来的笔记</span>
+          <span class="ord__st ord__st--1 num" v-if="favCount > 0">{{ favCount }}</span>
+          <tk-icon name="right" :size="15" class="row__chev"></tk-icon>
+        </a>
+        <a class="row row--link" href="/order.html">
+          <tk-icon name="ticket" :size="17"></tk-icon>
+          <span class="row__k" style="color:var(--ink);font-weight:700">我的订单</span>
+          <span class="row__v t-sm muted">抢到的券都在这</span>
+          <span class="ord__st ord__st--1 num" v-if="unpaid > 0">{{ unpaid }}</span>
+          <tk-icon name="right" :size="15" class="row__chev"></tk-icon>
+        </a>
+        <a class="row row--link" href="/address.html">
+          <tk-icon name="pin" :size="17"></tk-icon>
+          <span class="row__k" style="color:var(--ink);font-weight:700">地址簿</span>
+          <span class="row__v t-sm muted">收货地址 · 全国门店</span>
+          <tk-icon name="right" :size="15" class="row__chev"></tk-icon>
+        </a>
+      </div>
+    </section>
+
+    <div class="tabs" style="margin-top:22px">
+      <button class="tabs__i" type="button" :class="{ on: tab === '1' }" @click="switchTab('1')">
+        我的笔记
+      </button>
+      <button class="tabs__i" type="button" :class="{ on: tab === '2' }" @click="switchTab('2')">
+        关注动态
+      </button>
+    </div>
+
+    <!-- 我的笔记 -->
+    <div v-show="tab === '1'">
+      <div class="shops tk-in" v-if="blogs.length">
+        <a class="shop" v-for="b in blogs" :key="b.id" :href="'/blog-detail.html?id=' + b.id">
+          <span class="shop__ph"><img :src="b.cover" :alt="b.title" loading="lazy"></span>
+          <span class="shop__bd">
+            <span class="shop__t clamp2">{{ b.title }}</span>
+            <span class="shop__meta">
+              <tk-icon name="thumb" :size="13"></tk-icon>
+              <span class="num">{{ b.liked || 0 }}</span>
+              <span class="sep">·</span>
+              <tk-icon name="comment" :size="13"></tk-icon>
+              <span class="num">{{ b.comments || 0 }}</span>
+              <span class="sep">·</span>
+              <span class="num">{{ util.ago(b.createTime) }}</span>
+            </span>
+            <span class="shop__foot">
+              <span class="shop__no num">{{ util.no(b.id) }}</span>
+            </span>
+          </span>
+        </a>
+      </div>
+      <div class="empty" v-else-if="loaded">
+        <div class="empty__ic"><tk-icon name="edit" :size="24"></tk-icon></div>
+        <div class="empty__t">还没发过笔记</div>
+        <div class="empty__d">把你最近去过的好店写下来，别人能在首页刷到</div>
+        <div class="empty__act">
+          <a class="btn btn--p btn--sm" href="/blog-edit.html">写第一篇</a>
+        </div>
+      </div>
+      <div class="shops" v-else>
+        <div class="shop" v-for="i in 3" :key="i">
+          <div class="sk" style="flex:0 0 96px;width:96px;height:96px;border-radius:3px"></div>
+          <div class="shop__bd">
+            <div class="sk sk--line" style="width:70%"></div>
+            <div class="sk sk--line" style="width:50%;margin-top:10px"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 关注动态（Redis ZSet 推模式，滚动分页） -->
+    <div v-show="tab === '2'">
+      <div class="notes tk-in" v-if="following.length">
+        <article class="note" v-for="b in following" :key="b.id" @click="toBlog(b.id)">
+          <div class="note__ph"><img :src="b.cover" :alt="b.title" loading="lazy"></div>
+          <h3 class="note__t clamp3">{{ b.title }}</h3>
+          <div class="note__f">
+            <span class="av av--sm"><img :src="b.icon" :alt="b.name" loading="lazy"></span>
+            <span class="note__nm ellip">{{ b.name }}</span>
+            <span class="note__lk"><span class="num">{{ b.liked || 0 }}</span></span>
+          </div>
+        </article>
+      </div>
+      <div class="empty" v-else-if="followLoaded">
+        <div class="empty__ic"><tk-icon name="user" :size="24"></tk-icon></div>
+        <div class="empty__t">关注的人还没发新笔记</div>
+        <div class="empty__d">去首页找几个爱探店的博主关注一下</div>
+        <div class="empty__act">
+          <a class="btn btn--g btn--sm" href="/index.html">去首页逛逛</a>
+        </div>
+      </div>
+      <div class="notes" v-else>
+        <div class="note" v-for="i in 4" :key="i">
+          <div class="sk sk--ph"></div>
+          <div class="sk sk--line" style="margin:9px 10px 0"></div>
+          <div style="height:16px"></div>
+        </div>
+      </div>
+      <div class="sentinel" ref="followSentinel"></div>
+    </div>
+
+  </main>
+
+  <foot-bar :active-btn="4"></foot-bar>
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+new Vue({
+  el: "#app",
+  data: {
+    util: util,
+    user: {},
+    info: {},
+    loaded: false,
+    blogs: [],
+    // 关注动态的滚动分页游标，后端返回 { list, minTime, offset }
+    cursor: { minTime: 0, offset: 0 },
+    following: [],
+    followLoaded: false,
+    followDone: false,
+    tab: "1",
+    signCount: 0,
+    signing: false,
+    followIo: null,
+    // 「我的订单」那行上的待支付角标
+    unpaid: 0,
+    // 「我的收藏」那行上的数量
+    favCount: 0
+  },
+
+  computed: {
+    iconUrl: function () { return util.iconUrl(this.user.icon); },
+    memberNo: function () { return util.no(this.user.id, 6); },
+    likedTotal: function () {
+      return this.blogs.reduce(function (a, b) { return a + (b.liked || 0); }, 0);
+    },
+    /* 连续签到 N 天 = 从今天往前数 N 天都打了卡。
+       后端 /user/sign/count 返回的正是这个"截至今天的连续天数"，
+       所以今天没签时它是 0。 */
+    signedToday: function () { return this.signCount >= 1; },
+    week: function () {
+      var out = [];
+      var now = new Date();
+      var weekLabel = "日一二三四五六";
+      for (var i = 6; i >= 0; i--) {
+        var d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+        out.push({
+          d: d.getDate(),
+          w: weekLabel.charAt(d.getDay()),
+          today: i === 0,
+          on: i < this.signCount
+        });
+      }
+      return out;
+    }
+  },
+
+  created: function () {
+    var self = this;
+    this.queryUser();
+    // 「我的订单」那行上的待支付角标。查不到就算了，不影响页面其它部分
+    axios.get("/voucher-order/my", { params: { current: 1 } })
+      .then(function (res) {
+        return (res.data || []).filter(function (o) { return o.status === 1; }).length;
+      })
+      .then(function (n) { self.unpaid = n; })
+      .catch(function () { /* 角标而已，拿不到就不显示 */ });
+    // 收藏数量同理。收藏列表默认一页 5 条，所以最多只能数到 5 ——
+    // 这里只要个"有没有"的提示，真实总数在收藏页里看
+    axios.get("/blog/of/favorite", { params: { current: 1 } })
+      .then(function (res) { self.favCount = (res.data || []).length; })
+      .catch(function () { /* 同上 */ });
+  },
+
+  mounted: function () {
+    // 关注动态的触底哨兵挂在 v-show 的容器里，隐藏时不会触发
+    this.followIo = util.onBottom(this.$refs.followSentinel, this.queryFollow.bind(this));
+  },
+
+  beforeDestroy: function () {
+    if (this.followIo) this.followIo.disconnect();
+  },
+
+  methods: {
+    toBlog: function (id) { util.go("/blog-detail.html?id=" + id); },
+
+    queryUser: function () {
+      var self = this;
+      axios.get("/user/me")
+        .then(function (res) {
+          self.user = res.data || {};
+          self.queryInfo();
+          self.queryMyBlogs();
+          self.querySignCount();
+        })
+        .catch(function () {
+          // 未登录：拦截器已经把人送去登录页了
+          self.loaded = true;
+        });
+    },
+
+    queryInfo: function () {
+      var self = this;
+      axios.get("/user/info/" + this.user.id)
+        .then(function (res) {
+          self.info = res.data || {};
+          sessionStorage.setItem("userInfo", JSON.stringify(self.info));
+        })
+        .catch(function () { /* 没填过详情很正常 */ });
+    },
+
+    queryMyBlogs: function () {
+      var self = this;
+      axios.get("/blog/of/me")
+        .then(function (res) {
+          var list = res.data || [];
+          list.forEach(function (b) { b.cover = util.firstImage(b.images); });
+          self.blogs = list;
+        })
+        .catch(this.$message.error)
+        .then(function () { self.loaded = true; });
+    },
+
+    querySignCount: function () {
+      var self = this;
+      return axios.get("/user/sign/count")
+        .then(function (res) { self.signCount = Number(res.data) || 0; })
+        .catch(function () { self.signCount = 0; });
+    },
+
+    doSign: function () {
+      if (this.signedToday || this.signing) return;
+      var self = this;
+      this.signing = true;
+      axios.post("/user/sign")
+        .then(function () {
+          self.$message.success("签到成功");
+          return self.querySignCount();
+        })
+        .catch(this.$message.error)
+        .then(function () { self.signing = false; });
+    },
+
+    switchTab: function (t) {
+      this.tab = t;
+      if (t === "2" && !this.followLoaded && !this.followDone) {
+        this.queryFollow(true);
+      }
+    },
+
+    queryFollow: function (clear) {
+      var self = this;
+      if (clear) {
+        this.cursor = { minTime: Date.now() + 1, offset: 0 };
+        this.followDone = false;
+      }
+      if (this.followDone) return Promise.resolve();
+
+      return axios.get("/blog/of/follow", {
+        params: { lastId: this.cursor.minTime, offset: this.cursor.offset }
+      })
+        .then(function (res) {
+          var d = res.data;
+          this.followLoaded = true;
+          if (!d) { self.followDone = true; return; }   // 后端没数据时返回 data=null
+          var list = d.list || [];
+          list.forEach(function (b) {
+            b.cover = util.firstImage(b.images);
+            b.icon = util.iconUrl(b.icon);
+            b.name = b.name || "匿名用户";
+          });
+          var seen = {};
+          (clear ? [] : self.following).forEach(function (b) { seen[b.id] = 1; });
+          var fresh = list.filter(function (b) { return !seen[b.id]; });
+          self.following = clear ? fresh : self.following.concat(fresh);
+          self.cursor = { minTime: d.minTime, offset: d.offset };
+          if (!list.length) self.followDone = true;
+        })
+        .catch(function (e) {
+          self.followDone = true;
+          self.followLoaded = true;
+          self.$message.error(e);
+        });
+    },
+
+    logout: function () {
+      axios.post("/user/logout")
+        .catch(function () { /* 后端清没清干净，本地都得清 */ })
+        .then(function () { util.logout(); });
+    }
+  }
+});
+</script>
+</body>
+</html>

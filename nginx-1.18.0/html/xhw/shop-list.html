@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>店铺列表 · 小红碗</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="hd">
+    <button class="hd__btn" type="button" @click="goBack" aria-label="返回">
+      <tk-icon name="back" :size="20"></tk-icon>
+    </button>
+    <h1 class="hd__t">{{ title }}</h1>
+    <button class="hd__btn" type="button" @click="searchOpen = !searchOpen"
+            :aria-expanded="searchOpen ? 'true' : 'false'" aria-label="搜索商户">
+      <tk-icon name="search" :size="20"></tk-icon>
+    </button>
+  </header>
+
+  <!-- ⚠️ 这一层 <main class="main"> 不能省：
+       底部导航 .tk-ft 是 position: fixed，而 .main 带
+       padding-bottom: calc(var(--ft) + 28px)，专门给底栏让出高度。
+       少了它，页面最后一个元素会被底栏永久盖住（滚到底也露不出来）。_qa/html_lint.py 会检查。 -->
+  <main class="main">
+
+  <form v-if="searchOpen" class="pad" style="padding-bottom:0" @submit.prevent="doSearch">
+    <div class="search">
+      <span class="search__ico"><tk-icon name="search" :size="16"></tk-icon></span>
+      <input v-model.trim="keyword" placeholder="输入商户名，回车搜索" aria-label="商户名">
+    </div>
+  </form>
+
+  <!-- 排序条 -->
+  <div class="sortbar">
+    <button class="sortbar__i sortbar__city" type="button" @click="picker = true"
+            :aria-label="'当前区域 ' + regionText + '，点击切换'">
+      <span class="ellip">{{ regionLabel }}</span>
+      <tk-icon name="down" :size="13"></tk-icon>
+    </button>
+    <span class="sortbar__split" aria-hidden="true"></span>
+    <button class="sortbar__i" type="button" @click="typePicker = true">
+      <span class="ellip">{{ typeName || "全部" }}</span>
+      <tk-icon name="down" :size="13"></tk-icon>
+    </button>
+    <button class="sortbar__i" type="button" v-for="s in sorts" :key="s.k"
+            :class="{ on: sortBy === s.k }" @click="setSort(s.k)">
+      {{ s.t }}
+    </button>
+  </div>
+
+  <div class="shops tk-in" v-if="shops.length">
+    <article class="shop" v-for="s in sortedShops" :key="s.id" @click="toDetail(s.id)">
+      <div class="shop__ph">
+        <img :src="s.cover" :alt="s.name" loading="lazy">
+      </div>
+      <div class="shop__bd">
+        <h2 class="shop__t ellip">{{ s.name }}</h2>
+        <div class="shop__meta">
+          <tk-stars :score="s.score" show-score></tk-stars>
+          <span class="sep">·</span>
+          <span><span class="num">{{ s.comments || 0 }}</span> 条评价</span>
+          <template v-if="s.dist">
+            <span class="sep">·</span>
+            <span class="num">{{ s.dist }}</span>
+          </template>
+        </div>
+        <div class="shop__row">
+          <tk-icon name="pin" :size="13"></tk-icon>
+          <span class="ellip">{{ shopLoc(s) }}</span>
+        </div>
+        <div class="shop__foot">
+          <span class="shop__no num">{{ s.no }}</span>
+          <span class="shop__avg">人均 <b class="num">{{ s.avgPrice }}</b> 元</span>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <div class="shops" v-else-if="!loaded">
+    <div class="shop" v-for="i in 5" :key="i">
+      <div class="sk" style="flex:0 0 96px;width:96px;height:96px;border-radius:3px"></div>
+      <div class="shop__bd">
+        <div class="sk sk--line" style="width:65%"></div>
+        <div class="sk sk--line" style="width:45%;margin-top:10px"></div>
+        <div class="sk sk--line" style="width:80%;margin-top:10px"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="empty" v-else>
+    <div class="empty__ic"><tk-icon name="compass" :size="24"></tk-icon></div>
+    <div class="empty__t">{{ emptyTitle }}</div>
+    <div class="empty__d">{{ emptyDesc }}</div>
+    <div class="empty__act">
+      <button class="btn btn--g btn--sm" type="button" v-if="!isAll" @click="picker = true">
+        换个区域
+      </button>
+      <button class="btn btn--g btn--sm" type="button" v-if="!isAll && hotCity"
+              @click="gotoHot">去 {{ hotCity.name }}</button>
+      <button class="btn btn--g btn--sm" type="button" v-if="isAll" @click="typePicker = true">
+        换个类型
+      </button>
+    </div>
+  </div>
+
+  <div class="empty" v-if="loading && shops.length" style="padding:20px">
+    <span class="num faint" style="font-size:12px">正在翻页…</span>
+  </div>
+
+  <div class="sentinel" ref="sentinel"></div>
+
+  <!-- 类型选择抽屉（必须在 #app 内部，否则拿不到 Vue 的响应式） -->
+  <template v-if="typePicker">
+    <div class="mask" @click="typePicker = false"></div>
+    <div class="sheet" role="dialog" aria-label="选择店铺类型">
+      <div class="sheet__hd">
+        <span class="sheet__t">选择类型</span>
+        <button class="hd__btn" type="button" @click="typePicker = false" aria-label="关闭">
+          <tk-icon name="close" :size="18"></tk-icon>
+        </button>
+      </div>
+      <div class="sheet__bd">
+        <div class="pick" v-for="t in types" :key="t.id" @click="pickType(t)">
+          <span class="cat__ic" style="width:26px;height:26px">
+            <img :src="imgOf(t.icon)" :alt="t.name" loading="lazy">
+          </span>
+          <span class="pick__t">{{ t.name }}</span>
+          <tk-icon v-if="mode === 'type' && t.id === typeId" name="check" :size="16"></tk-icon>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- 省 / 市 / 区 三级选择 -->
+  <tk-region :open="picker" :value="region"
+             @change="onRegion" @close="picker = false"></tk-region>
+
+  </main>
+
+  <foot-bar :active-btn="0"></foot-bar>
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+var PAGE_SIZE = 10;
+
+new Vue({
+  el: "#app",
+  data: {
+    types: [],
+    typeId: 0,
+    typeName: "",
+    region: { province: "", city: "", district: "" },
+    picker: false,
+    keyword: "",
+    searchOpen: false,
+    mode: "type",          // type = 按分类逛；name = 按名字搜
+    typePicker: false,
+    sortBy: "dist",
+    shops: [],
+    current: 1,
+    loading: false,
+    loaded: false,
+    hasMore: true,
+    // 见 index.html 里的同名注释：util 的缓存不是响应式的，
+    // 得靠这两个字段当闸门，计算属性才会跟着接口回来一起重算
+    regionsReady: false,
+    pos: null,
+    shopCount: 0
+  },
+
+  computed: {
+    isAll: function () { return util.isAllRegion(this.region); },
+    regionLabel: function () { return util.regionLabel(this.region); },
+    regionText: function () { return util.regionText(this.region); },
+    hotCity: function () {
+      var _ = this.regionsReady;
+      return util.hotCities(1)[0] || null;
+    },
+
+    /* 「距离」只在"选定了某座城市、而且那座城有门店"时才有意义：
+       /shop/of/type 的距离是服务端 GEO 算的，需要一个圆心坐标；
+       坐标来自「该城所有店铺的坐标均值」，所以没门店的城市根本没有圆心。
+       其余三项都是纯前端排序，什么时候都能用。 */
+    sorts: function () {
+      var base = [
+        { k: "avgPrice", t: "人均" },
+        { k: "score", t: "评分" },
+        { k: "sold", t: "人气" }
+      ];
+      return this.pos ? [{ k: "dist", t: "距离" }].concat(base) : base;
+    },
+
+    title: function () {
+      if (this.mode === "name") return "搜索「" + this.keyword + "」";
+      return this.typeName || "全部店铺";
+    },
+
+    hereHasShop: function () { return this.shopCount > 0; },
+    emptyTitle: function () {
+      if (this.mode === "name") return "没搜到这家店";
+      if (!this.isAll && !this.hereHasShop) return this.regionLabel + "还没有门店";
+      return "这个区域下还没有店";
+    },
+    emptyDesc: function () {
+      if (this.mode === "name") return "换个关键词，或者回到分类里逛逛";
+      if (!this.isAll && !this.hereHasShop) return "换个区域看看，这座城市我们还没开进去";
+      return "换个区域或类型看看";
+    },
+
+    /* 距离是服务端 GEO 排好序的，其余三项在前端对已加载结果排序。
+       注意：后端 /shop/of/type 只接受 typeId / current / x / y / province / city / district，
+       并没有 sortBy 参数——老代码里那个"人气/评分排序"其实完全没生效，
+       而且每次点击都不重置列表，直接把同一页数据又 concat 了一遍。 */
+    sortedShops: function () {
+      var list = this.shops.slice();
+      var k = this.sortBy;
+      if (k === "avgPrice") list.sort(function (a, b) { return (a.avgPrice || 0) - (b.avgPrice || 0); });
+      else if (k === "score") list.sort(function (a, b) { return (b.score || 0) - (a.score || 0); });
+      else if (k === "sold") list.sort(function (a, b) { return (b.sold || 0) - (a.sold || 0); });
+      return list;
+    }
+  },
+
+  created: function () {
+    var self = this;
+    var t = util.param("type");
+    var n = util.param("name");
+    // 从首页点进来时 URL 上带着区域；直接在地址栏打开就沿用上次记住的。
+    // 三个都是空串时同样算「没传」，回落到 localStorage。
+    var q = util.param("province"), c = util.param("city"), d = util.param("district");
+    if (q || c || d) {
+      util.setRegion({ province: q, city: c, district: d });
+    }
+    this.region = util.getRegion();
+    this.keyword = n || "";
+    if (t) {
+      this.typeId = Number(t);
+      this.mode = "type";
+    } else if (n) {
+      this.mode = "name";
+    }
+
+    // 顺序很重要：先拿区划树（选择器要用，也要用它判断"这座城有没有门店"），
+    // 再拿城市坐标表（GEO 圆心要用），最后才查店铺。
+    Promise.all([util.loadRegions(), util.loadCities()])
+      .then(function () {
+        // ⚠️ 顺序不能反：必须先把 shopCount / pos 算出来，再做"兜回全国"的判断。
+        // 反过来的话 hereHasShop 读到的还是初始值 0，任何合法区域都会被当成
+        // "没开进去"而兜回全国 —— 症状是地址栏明明选了成都，页面却是全国。
+        self.pos = util.cityPos(self.region.city);
+        self.shopCount = util.cityCount(self.region.province, self.region.city);
+        if (self.region.city && !self.shopCount) {
+          // URL 上是个没开进去的城市时兜回全国。否则会稳定地查出 0 条，
+          // 页面显示空列表——用户完全看不出是"参数不合法"还是"App 坏了"。
+          self.region = util.setRegion({ province: "", city: "", district: "" });
+          self.pos = null;
+          self.shopCount = 0;
+        }
+        self.regionsReady = true;
+        self.sortBy = self.pos ? "dist" : "sold";
+        return self.queryTypes();
+      })
+      .then(function () { self.query(); });
+  },
+
+  mounted: function () {
+    this.io = util.onBottom(this.$refs.sentinel, this.query.bind(this));
+  },
+
+  beforeDestroy: function () {
+    if (this.io) this.io.disconnect();
+  },
+
+  methods: {
+    imgOf: function (p) { return util.imgPath(p); },
+    goBack: function () { util.back(); },
+    toDetail: function (id) { util.go("/shop-detail.html?id=" + id); },
+
+    /* 全国视图下把省市区都写出来；已经选定了区域就只显示商圈 + 地址 */
+    shopLoc: function (s) {
+      if (!this.isAll) return (s.area ? s.area + " · " : "") + s.address;
+      return [s.province, s.city, s.district, s.area, s.address].filter(Boolean).join(" · ");
+    },
+
+    queryTypes: function () {
+      var self = this;
+      return axios.get("/shop-type/list")
+        .then(function (res) {
+          self.types = res.data || [];
+          if (self.mode !== "type") return;
+          // typeId 是 @RequestParam 必填，兜一个有效值，否则 400
+          if (!self.typeId && self.types.length) self.typeId = self.types[0].id;
+          if (!self.typeName) self.typeName = self.nameOfType(self.typeId);
+        })
+        .catch(function (e) { self.$message.error(e); });
+    },
+
+    nameOfType: function (id) {
+      var hit = this.types.filter(function (t) { return t.id === id; })[0];
+      return hit ? hit.name : "全部店铺";
+    },
+
+    reset: function () {
+      this.shops = [];
+      this.current = 1;
+      this.hasMore = true;
+      this.loaded = false;
+    },
+
+    onRegion: function (r) {
+      this.region = util.setRegion(r);
+      this.picker = false;
+      this.pos = util.cityPos(this.region.city);
+      this.shopCount = util.cityCount(this.region.province, this.region.city);
+      // 切到没有门店的区域后，「距离」会从排序条上消失，得先把选中项挪开，
+      // 否则界面上会出现"没有任何按钮是选中态"
+      if (!this.pos && this.sortBy === "dist") this.sortBy = "sold";
+      this.reset();
+      this.query();
+    },
+
+    gotoHot: function () {
+      var h = this.hotCity;
+      if (!h) return;
+      this.onRegion({ province: h.province, city: h.name, district: "" });
+    },
+
+    query: function () {
+      if (this.loading || !this.hasMore) return Promise.resolve();
+      var self = this;
+      this.loading = true;
+      var r = this.region;
+      var region = { province: r.province, city: r.city, district: r.district };
+
+      var req;
+      if (this.mode === "name") {
+        req = axios.get("/shop/of/name",
+          Object.assign({ name: this.keyword, current: this.current }, region));
+      } else {
+        var params = Object.assign({ typeId: this.typeId, current: this.current }, region);
+        // 只在这座城有坐标时才带 x/y：带了后端才走 GEO 分支并按距离排序
+        var pos = this.pos;
+        if (pos) {
+          params.x = pos.x;
+          params.y = pos.y;
+        }
+        req = axios.get("/shop/of/type", { params: params });
+      }
+
+      return req.then(function (res) {
+        var list = res.data || [];
+        var seen = {};
+        self.shops.forEach(function (s) { seen[s.id] = 1; });
+        list.forEach(function (s) {
+          if (seen[s.id]) return;   // 分页边界上偶尔会重复，去个重
+          seen[s.id] = 1;
+          s.cover = util.firstImage(s.images);
+          s.dist = util.dist(s.distance);
+          s.no = util.no(s.id);
+          self.shops.push(s);
+        });
+        self.current += 1;
+        self.hasMore = list.length >= PAGE_SIZE;
+      }).catch(function (e) {
+        self.hasMore = false;
+        self.$message.error(e);
+      }).then(function () {
+        self.loading = false;
+        self.loaded = true;
+      });
+    },
+
+    setSort: function (k) {
+      // 纯前端排序，不重新请求，也就不会像老代码那样把列表翻倍
+      this.sortBy = k;
+    },
+
+    pickType: function (t) {
+      this.typePicker = false;
+      if (this.mode === "type" && t.id === this.typeId) return;
+      this.typeId = t.id;
+      this.typeName = t.name;
+      this.mode = "type";
+      this.reset();
+      this.query();
+    },
+
+    doSearch: function () {
+      var q = (this.keyword || "").trim();
+      if (!q) { this.$message.info("输入商户名再搜"); return; }
+      this.mode = "name";
+      this.searchOpen = false;
+      this.reset();
+      this.query();
+    }
+  }
+});
+</script>
+</body>
+</html>

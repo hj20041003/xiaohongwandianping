@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>地图找店 · 小红碗</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="hd">
+    <button class="hd__btn" type="button" @click="goBack" aria-label="返回">
+      <tk-icon name="back" :size="20"></tk-icon>
+    </button>
+    <h1 class="hd__t">地图找店</h1>
+    <button class="hd__city" type="button" @click="picker = true"
+            :aria-label="'当前区域 ' + regionText + '，点击切换'">
+      <span class="ellip">{{ regionLabel }}</span><tk-icon name="down" :size="14"></tk-icon>
+    </button>
+  </header>
+
+  <!-- 地图区 -->
+  <div class="mp">
+    <div class="mp__cv" ref="canvas" role="application"
+         aria-label="门店地图，点标记或下方列表查看详情"></div>
+
+    <!-- 高德脚本是**按需注入**的：没配 key 就不去请求外网，
+         这样无 key 的环境下这一页秒开，也不会有任何报错 -->
+    <div class="mp__mask" v-if="!mapReady">
+      <div class="mp__card">
+        <span class="mp__card-ic"><tk-icon name="map" :size="20"></tk-icon></span>
+        <div class="mp__card-bd">
+          <div class="mp__card-t">{{ mapTipTitle }}</div>
+          <div class="mp__card-d">{{ mapTipDesc }}</div>
+        </div>
+        <a v-if="!hasKey" class="btn btn--p btn--sm" target="_blank"
+           rel="noopener"
+           href="https://console.amap.com/dev/key/app">去申请 key</a>
+        <div class="mp__spin" v-else aria-label="加载中"></div>
+      </div>
+    </div>
+
+    <button class="mp__fab" type="button" v-if="mapReady" @click="locate"
+            :disabled="locating" aria-label="定位到我的位置">
+      <tk-icon name="pin" :size="18"></tk-icon>
+      <span class="mp__fab-t" v-if="locating">定位中</span>
+    </button>
+
+    <div class="mp__scale" v-if="mapReady && picked">
+      <span class="mp__scale-t">{{ typeName(picked.typeId) }} · {{ picked.area }}</span>
+    </div>
+  </div>
+
+  <!-- 选中卡片：点标记或点列表都会浮出来 -->
+  <transition name="tk-rise">
+    <div class="mp-pick" v-if="picked">
+      <span class="mp-pick__ph">
+        <img :src="imgOf(typeIcon(picked.typeId))" :alt="typeName(picked.typeId)" loading="lazy">
+      </span>
+      <div class="mp-pick__bd">
+        <div class="mp-pick__t ellip">{{ picked.name }}</div>
+        <div class="mp-pick__s ellip">{{ locOf(picked) }}</div>
+        <div class="mp-pick__m">
+          <span>人均 <b class="num">{{ picked.avgPrice }}</b></span>
+          <span class="sep">·</span>
+          <span><b class="num">{{ picked.score / 10 }}</b> 分</span>
+          <template v-if="distOf(picked)">
+            <span class="sep">·</span>
+            <span class="num">{{ distOf(picked) }}</span>
+          </template>
+        </div>
+      </div>
+      <a class="btn btn--p btn--sm mp-pick__go"
+         :href="'/shop-detail.html?id=' + picked.id">进店</a>
+      <button class="mp-pick__x" type="button" @click="picked = null" aria-label="关闭">
+        <tk-icon name="close" :size="15"></tk-icon>
+      </button>
+    </div>
+  </transition>
+
+  <!-- 门店列表：地图之外始终可用的第二条路，也是无 key 时的主要界面 -->
+  <main class="main mp-list">
+    <section class="sec">
+      <div class="sec__hd">
+        <h2 class="sec__t">{{ listTitle }}</h2>
+        <span class="masthead__r">{{ list.length }} 家</span>
+      </div>
+
+      <div class="shops" v-if="list.length">
+        <article class="shop" v-for="s in list" :key="s.id"
+                 :class="{ 'shop--on': picked && picked.id === s.id }"
+                 @click="focus(s)">
+          <div class="shop__ph">
+            <img :src="imgOf(typeIcon(s.typeId))" :alt="typeName(s.typeId)" loading="lazy">
+          </div>
+          <div class="shop__bd">
+            <h2 class="shop__t ellip">{{ s.name }}</h2>
+            <div class="shop__meta">
+              <span class="num">{{ typeName(s.typeId) }}</span>
+              <span class="sep">·</span>
+              <span><span class="num">{{ s.comments || 0 }}</span> 条评价</span>
+              <template v-if="distOf(s)">
+                <span class="sep">·</span>
+                <span class="num">{{ distOf(s) }}</span>
+              </template>
+            </div>
+            <div class="shop__row">
+              <tk-icon name="pin" :size="13"></tk-icon>
+              <span class="ellip">{{ locOf(s) }}</span>
+            </div>
+            <div class="shop__foot">
+              <span class="shop__no num">{{ s.no }}</span>
+              <span class="shop__avg">人均 <b class="num">{{ s.avgPrice }}</b> 元</span>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <div class="empty" v-else-if="loaded">
+        <div class="empty__ic"><tk-icon name="compass" :size="24"></tk-icon></div>
+        <div class="empty__t">{{ isAll ? "全国还没有门店" : regionLabel + "还没有门店" }}</div>
+        <div class="empty__d">{{ isAll ? "" : "换个区域看看，或者看看这几座热门城市" }}</div>
+        <div class="empty__act">
+          <button class="btn btn--g btn--sm" type="button" v-if="!isAll" @click="picker = true">
+            换个区域
+          </button>
+          <button class="btn btn--g btn--sm" type="button" v-if="!isAll && hotCity"
+                  @click="gotoHot">去 {{ hotCity.name }}</button>
+        </div>
+      </div>
+
+      <div class="shops" v-else>
+        <div class="shop" v-for="i in 3" :key="i">
+          <div class="sk" style="flex:0 0 96px;width:96px;height:96px;border-radius:3px"></div>
+          <div class="shop__bd">
+            <div class="sk sk--line" style="width:65%"></div>
+            <div class="sk sk--line" style="width:45%;margin-top:10px"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 省 / 市 / 区 三级选择，和首页、店铺列表共用同一个组件 -->
+  <tk-region :open="picker" :value="region" :auto-district="false"
+             @change="onRegion" @close="picker = false"></tk-region>
+
+  <foot-bar :active-btn="2"></foot-bar>
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/config.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+/* ============================================================================
+ *  地图找店
+ *  ------------------------------------------------------------------------
+ *  底图是高德 JS API，key 放在 js/config.js。没配 key 时这一页**不会白屏**：
+ *  地图区显示一张引导卡，下面的门店列表和城市切换照常工作。
+ *
+ *  两个刻意的设计：
+ *
+ *  ① 门店坐标直接用 x/y，不需要坐标纠偏。
+ *     种子数据的坐标来自高德行政区划（regions.json 里的城市中心点）再叠加
+ *     ±0.018 度抖动，本身就是 **GCJ-02 火星坐标系**；高德底图也是 GCJ-02。
+ *     换成百度/腾讯底图就必须做一次坐标转换，否则整张图会偏出去几百米。
+ *
+ *  ② 高德脚本按需注入，不写死在 <script src> 里。
+ *     写死的话：① 没配 key 时会白屏并刷一串跨域错误；
+ *     ② 离线环境下会把首屏拖住几秒；③ 渲染回归里 jsdom 会去真的请求外网。
+ * ========================================================================== */
+new Vue({
+  el: "#app",
+  data: {
+    util: util,
+    region: { province: "", city: "", district: "" },
+    picker: false,
+    shops: [],
+    types: [],
+    loaded: false,
+    picked: null,
+    me: null,            // 浏览器定位结果 {lng, lat}
+    locating: false,
+    mapReady: false,
+    mapFailed: false,
+    locating_: null
+  },
+
+  computed: {
+    isAll: function () { return util.isAllRegion(this.region); },
+    regionLabel: function () { return util.regionLabel(this.region); },
+    regionText: function () { return util.regionText(this.region); },
+    hasKey: function () {
+      return !!(window.APP_CONFIG && window.APP_CONFIG.AMAP_KEY);
+    },
+    hotCity: function () { return util.hotCities(1)[0] || null; },
+
+    /* 顺序有讲究：「没配 key」要先判。
+       反过来的话，没配 key（mapFailed 也被置了位）会显示成"加载失败"，
+       让人以为是网络问题，去查一个根本不存在的问题。 */
+    mapTipTitle: function () {
+      if (!this.hasKey) return "还没配地图 key";
+      if (this.mapFailed) return "地图加载失败";
+      return "地图加载中…";
+    },
+    mapTipDesc: function () {
+      if (!this.hasKey) {
+        return "到高德开放平台申请一个 Web端(JS API) 的 key，填进 js/config.js 的 AMAP_KEY。";
+      }
+      if (this.mapFailed) return "检查一下网络，或换个 key。下面照样能看门店列表。";
+      return "高德脚本正在下载，下面照样能看门店列表。";
+    },
+
+    /* 全国视图 = 全部 8 城的店；选定城市 = 只这座城。
+       数据一次从 /shop/directory 拿全（84 行，很轻），切换区域纯前端过滤，
+       不用为每座城发一次请求。 */
+    pool: function () {
+      if (this.isAll) return this.shops;
+      var r = this.region;
+      return this.shops.filter(function (s) {
+        if (s.city !== r.city) return false;
+        // 没选区就是"整座城"（地图页传了 auto-district=false，点城市不会自动落到区）
+        return !r.district || s.district === r.district;
+      });
+    },
+    list: function () {
+      var me = this.me;
+      var arr = this.pool.slice();
+      arr.forEach(function (s) {
+        s.__d = me ? util.haversine(me.lng, me.lat, s.x, s.y) : null;
+      });
+      // 定位到了就按距离从近到远；没定位就按销量（和首页「人气」一个口径）。
+      // sold 由 /shop/directory 提供；后端没升级到这一版时是 undefined，
+      // (b.sold || 0) 会让排序退化成原顺序，不会报错。
+      if (me) arr.sort(function (a, b) { return (a.__d || 1e12) - (b.__d || 1e12); });
+      else arr.sort(function (a, b) { return (b.sold || 0) - (a.sold || 0); });
+      return arr;
+    },
+    listTitle: function () {
+      if (this.isAll) return "全国门店";
+      return this.regionLabel + "的门店";
+    }
+  },
+
+  created: function () {
+    this.region = util.getRegion();
+    this.load();
+    this.initMap();
+  },
+
+  beforeDestroy: function () {
+    if (this.map) {
+      this.map.destroy();
+      this.map = null;
+    }
+  },
+
+  methods: {
+    goBack: function () { util.back(); },
+
+    typeName: function (id) {
+      var hit = this.types.filter(function (t) { return t.id === id; })[0];
+      return hit ? hit.name : "门店";
+    },
+    typeIcon: function (id) {
+      var hit = this.types.filter(function (t) { return t.id === id; })[0];
+      return hit ? hit.icon : "/imgs/icons/default-icon.png";
+    },
+    imgOf: function (p) { return util.imgPath(p); },
+    /* 全国视图下把省市区都写出来 —— 地图是按位置找店，
+       只写「大关 · 金华路…」的话根本不知道是哪座城。 */
+    locOf: function (s) {
+      if (!this.isAll) return [s.area, s.address].filter(Boolean).join(" · ");
+      return [s.province, s.city, s.district, s.area, s.address].filter(Boolean).join(" · ");
+    },
+    distOf: function (s) {
+      return s && s.__d !== null && s.__d !== undefined ? util.dist(s.__d) : "";
+    },
+
+    load: function () {
+      var self = this;
+      Promise.all([axios.get("/shop/directory"), axios.get("/shop-type/list")])
+        .then(function (res) {
+          self.shops = (res[0].data || []).reduce(function (all, c) {
+            return all.concat(c.shops || []);
+          }, []).map(function (s) {
+            s.no = util.no(s.id);
+            return s;
+          });
+          self.types = res[1].data || [];
+          self.loaded = true;
+          if (self.map) self.render();
+        })
+        .catch(function (e) {
+          self.loaded = true;
+          self.$message.error(e);
+        });
+    },
+
+    /* ------------------------------------------------------------ 地图 */
+
+    /** 按需注入高德脚本。返回 Promise，失败也 resolve(null) —— 降级不靠抛异常。 */
+    loadAmap: function () {
+      var cfg = window.APP_CONFIG || {};
+      if (!cfg.AMAP_KEY) return Promise.resolve(null);
+      if (window.AMap) return Promise.resolve(window.AMap);
+      // 安全密钥要在脚本加载**之前**设好，晚了就无效
+      if (cfg.AMAP_SECURITY_CODE) {
+        window._AMapSecurityConfig = { securityJsCode: cfg.AMAP_SECURITY_CODE };
+      }
+      return new Promise(function (resolve) {
+        var s = document.createElement("script");
+        s.src = "https://webapi.amap.com/maps?v=2.0&key=" + encodeURIComponent(cfg.AMAP_KEY) +
+                "&plugin=AMap.Geolocation,AMap.ToolBar";
+        s.async = true;
+        s.onload = function () { resolve(window.AMap || null); };
+        // 高德在 key 无效 / 网络不通时不抛错，只是永远不触发 onload。
+        // 所以必须加个兜底超时，否则页面会一直停在"加载中"。
+        s.onerror = function () { resolve(null); };
+        setTimeout(function () { resolve(window.AMap || null); }, 12000);
+        document.head.appendChild(s);
+      });
+    },
+
+    /* attempt 是为了给"容器还没高度"这件事兜底的计数。
+       AMap 对 0 高度容器会**静默不渲染**，所以必须等到有高度再初始化；
+       但**不能无限重试**——jsdom 里（以及任何不做布局的环境里）
+       clientHeight 恒为 0，无界的 nextTick 递归会把页面卡死，
+       连带把跑它的测试进程一起挂住。给个上限，超了就老实降级。 */
+    initMap: function (attempt) {
+      var self = this;
+      attempt = attempt || 0;
+      this.loadAmap().then(function (AMap) {
+        if (!AMap) {
+          // 没配 key 不是"失败"——本来就没打算加载，别把提示文案带偏
+          if (self.hasKey) self.mapFailed = true;
+          return;
+        }
+        var box = self.$refs.canvas;
+        if (!box || !box.clientHeight) {
+          if (attempt >= 20) {          // 最多等 20 × 80ms = 1.6s
+            self.mapFailed = true;
+            return;
+          }
+          setTimeout(function () { self.initMap(attempt + 1); }, 80);
+          return;
+        }
+        self.map = new AMap.Map(box, {
+          zoom: window.APP_CONFIG.AMAP_DEFAULT_ZOOM || 4,
+          center: [116.405285, 39.904989],
+          resizeEnable: true,
+          viewMode: "2D",
+          mapStyle: "amap://styles/whitesmoke"
+        });
+        self.geo = new AMap.Geolocation({
+          enableHighAccuracy: true,      // 高精度：WiFi/基站辅助定位
+          timeout: 8000
+          // 不传 position：高德会在地图右下角再放一个它自己的定位按钮，
+          // 和我们自己的 .mp__fab 重复了
+        });
+        self.mapReady = true;
+        self.render();
+      });
+    },
+
+    /** 重画标记并把视野挪到当前数据上 */
+    render: function () {
+      if (!this.map || !this.mapReady) return;
+      var self = this;
+      this.map.clearMap();
+      this.markers = [];
+      var list = this.list;
+      if (!list.length) {
+        this.picked = null;
+        return;
+      }
+      var bounds = new window.AMap.LngLatBounds();
+      list.forEach(function (s) {
+        if (s.x === null || s.x === undefined) return;
+        var pt = [s.x, s.y];
+        bounds.extend(pt);
+        var m = new window.AMap.Marker({
+          position: pt,
+          title: s.name,
+          // 自定义标记：一个实心圆点 + 门店类型名首字，比默认图钉更像"店"
+          content: '<div class="mp-pin"><span>' +
+                   util.esc(self.typeName(s.typeId).charAt(0)) + '</span></div>',
+          offset: new window.AMap.Pixel(-13, -30)
+        });
+        m.on("click", function () { self.pick(s); });
+        m.setMap(self.map);
+        self.markers.push(m);
+      });
+      if (bounds.isEmpty()) return;
+      this.map.setFitView(bounds, false, [40, 40, 40, 40], 17);
+    },
+
+    /** 选中一家店：列表点它也走这里，地图跟着挪过去 */
+    pick: function (s) {
+      this.picked = s;
+      if (this.map && s.x !== null && s.x !== undefined) {
+        this.map.setZoomAndCenter(Math.max(this.map.getZoom(), 15), [s.x, s.y]);
+      }
+      this.scrollTo(s);
+    },
+
+    focus: function (s) {
+      this.pick(s);
+    },
+
+    scrollTo: function (s) {
+      var self = this;
+      this.$nextTick(function () {
+        var el = self.$el.querySelector('.shop--on');
+        if (el && el.scrollIntoView) {
+          el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }
+      });
+    },
+
+    locate: function () {
+      if (!this.geo || this.locating) return;
+      var self = this;
+      this.locating = true;
+      this.geo.getCurrentPosition(function (status, result) {
+        self.locating = false;
+        if (status !== "complete" || !result || !result.position) {
+          self.$message.info("没定位到，可能拒绝了定位权限");
+          return;
+        }
+        var p = result.position;
+        self.me = { lng: p.lng, lat: p.lat };
+        if (self.map) {
+          self.map.setZoomAndCenter(15, [p.lng, p.lat]);
+          // 我的位置：用一个蓝色圆点单独标出来
+          self.map.add(new window.AMap.CircleMarker({
+            center: [p.lng, p.lat], radius: 7,
+            strokeColor: "#fff", strokeWeight: 3,
+            fillColor: "#1a73e8", fillOpacity: 1
+          }));
+        }
+        self.$message.success("已按距离排序");
+        self.scrollTo(self.list[0]);
+      });
+    },
+
+    /* ------------------------------------------------------------ 区域 */
+
+    onRegion: function (r) {
+      this.region = util.setRegion(r);
+      this.picker = false;
+      this.picked = null;
+      if (this.map) this.render();
+    },
+
+    gotoHot: function () {
+      var h = this.hotCity;
+      if (!h) return;
+      this.onRegion({ province: h.province, city: h.name, district: "" });
+    }
+  }
+});
+</script>
+</body>
+</html>

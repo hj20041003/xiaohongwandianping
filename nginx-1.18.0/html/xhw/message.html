@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>消息 · 小红碗</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="hd">
+    <span class="hd__spacer"></span>
+    <h1 class="hd__t">消息</h1>
+    <button class="hd__btn hd__btn--txt" type="button" v-if="unread > 0"
+            :disabled="marking" @click="markAllRead(false)"
+            :style="marking ? 'opacity:.5' : 'color:var(--ticket)'">
+      {{ marking ? "处理中" : "全部已读" }}
+    </button>
+    <span class="hd__spacer" v-else></span>
+  </header>
+
+  <!-- 三类的条数一眼可见，省得一条条翻 -->
+  <div class="tabs">
+    <button class="tabs__i" type="button" v-for="t in tabs" :key="t.k"
+            :class="{ on: tab === t.k }" @click="tab = t.k">
+      {{ t.t }}<span class="num tabs__n" v-if="countOf(t.k)">{{ countOf(t.k) }}</span>
+    </button>
+  </div>
+
+  <main class="main">
+    <div class="msgs tk-in" v-if="shown.length">
+      <article class="msg" v-for="m in shown" :key="m.type + '-' + m.fromUserId + '-' + (m.blogId || 0) + '-' + m.createTime"
+               :class="{ 'msg--new': m.unread }" @click="open(m)">
+        <span class="av av--sm msg__av">
+          <img :src="iconOf(m)" :alt="m.fromName">
+        </span>
+        <div class="msg__bd">
+          <div class="msg__t">
+            <b class="ellip">{{ m.fromName }}</b>
+            <span class="atag">{{ typeText(m.type) }}</span>
+            <span class="msg__ago num">{{ util.ago(m.createTime) }}</span>
+          </div>
+          <div class="msg__d">
+            <template v-if="m.type === 'follow'">关注了你</template>
+            <template v-else-if="m.type === 'like'">赞了你的笔记「{{ m.blogTitle }}」</template>
+            <template v-else>在「{{ m.blogTitle }}」下评论：{{ m.content }}</template>
+          </div>
+        </div>
+        <span class="msg__dot" v-if="m.unread" aria-label="未读"></span>
+      </article>
+
+      <button class="btn btn--g btn--full" type="button" v-if="more" @click="loadMore">
+        看更早的
+      </button>
+    </div>
+
+    <div class="empty" v-else-if="loaded">
+      <div class="empty__ic"><tk-icon name="message" :size="24"></tk-icon></div>
+      <div class="empty__t">{{ tab === "all" ? "还没有消息" : "这一类还没有消息" }}</div>
+      <div class="empty__d">
+        别人赞你的笔记、关注你、评论你的笔记，都会出现在这里
+      </div>
+      <div class="empty__act">
+        <a class="btn btn--p btn--sm" href="/blog-edit.html">写篇笔记招点互动</a>
+      </div>
+    </div>
+
+    <div class="msgs" v-else>
+      <div class="msg" v-for="i in 4" :key="i">
+        <div class="sk" style="flex:0 0 36px;width:36px;height:36px;border-radius:50%"></div>
+        <div class="msg__bd">
+          <div class="sk sk--line" style="width:45%"></div>
+          <div class="sk sk--line" style="width:75%;margin-top:8px"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <foot-bar :active-btn="3"></foot-bar>
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+/* 一页 20 条（和后端 MessageServiceImpl.PAGE_SIZE 对齐）。
+   后端把三类合并好再分页，前端只管往下翻。 */
+new Vue({
+  el: "#app",
+  data: {
+    util: util,
+    all: [],
+    total: 0,
+    unread: 0,
+    current: 1,
+    tab: "all",
+    loaded: false,
+    marking: false,
+    tabs: [
+      { k: "all", t: "全部" },
+      { k: "like", t: "赞" },
+      { k: "follow", t: "关注" },
+      { k: "comment", t: "评论" }
+    ]
+  },
+
+  computed: {
+    shown: function () {
+      if (this.tab === "all") return this.all;
+      var t = this.tab;
+      return this.all.filter(function (m) { return m.type === t; });
+    },
+    /** 还有没有下一页（已加载的攒够 total 就没有更多了） */
+    more: function () { return this.all.length < this.total; }
+  },
+
+  created: function () {
+    this.load(true);
+  },
+
+  methods: {
+    iconOf: function (m) { return util.iconUrl(m.fromIcon); },
+
+    typeText: function (t) {
+      return t === "like" ? "赞" : t === "follow" ? "关注" : "评论";
+    },
+
+    /* tab 上的小数字 = 这一类有多少条。
+       不用显示未读数：进这一页就自动全部已读了，
+       那个数字只有"进这一页之前"才有意义，由底部导航的小红点承担。 */
+    countOf: function (k) {
+      if (k === "all") return this.total;
+      return this.all.filter(function (m) { return m.type === k; }).length;
+    },
+
+    load: function (reset) {
+      var self = this;
+      if (reset) this.current = 1;
+      return axios.get("/message/list", { params: { current: this.current } })
+        .then(function (res) {
+          var d = res.data || {};
+          var list = d.list || [];
+          self.total = d.total || 0;
+          self.unread = d.unread || 0;
+          self.all = reset ? list : self.all.concat(list);
+          self.loaded = true;
+          // ⚠️ 这里**不要**自动调 markAllRead。
+          // 试过"进页即已读"，结果是：unread 立刻变成 0 →
+          // ① 右上角那个「全部已读」按钮永远等不到 unread>0，成了死按钮；
+          // ② 列表里的未读样式（左侧竖线 + 小红点）一次都不会显示。
+          // 消息中心存在的意义就是"提醒你有新东西"，那就让它提醒到你自己处理为止。
+        })
+        .catch(function (e) {
+          self.loaded = true;
+          self.$message.error(e);
+        });
+    },
+
+    loadMore: function () {
+      this.current += 1;
+      this.load(false);
+    },
+
+    markAllRead: function () {
+      var self = this;
+      if (this.marking) return;
+      this.marking = true;
+      axios.post("/message/read")
+        .then(function () {
+          self.unread = 0;
+          self.all.forEach(function (m) { m.unread = false; });
+          self.$message.success("都标成已读了");
+        })
+        .catch(this.$message.error)
+        .then(function () { self.marking = false; });
+    },
+
+    /* 点一条消息：关注类去对方主页，其余去那篇笔记。
+       follow 类型没有 blogId，所以按类型分流，而不是无脑跳笔记页。 */
+    open: function (m) {
+      if (m.type === "follow") {
+        util.go("/other-info.html?id=" + m.fromUserId);
+      } else if (m.blogId) {
+        util.go("/blog-detail.html?id=" + m.blogId);
+      }
+    }
+  }
+});
+</script>
+</body>
+</html>

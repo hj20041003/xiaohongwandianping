@@ -1,0 +1,58 @@
+HELP.md
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+# 运行时产物（日志、崩溃转储、构建输出）
+*.log
+hs_err_pid*.log
+replay_pid*.log
+nginx-1.18.0/logs/
+
+# ── nginx：只保留这个项目自己用到的东西 ──
+# nginx.exe / docs / contrib / temp 都是**别人的发行版内容**，推上去只是给仓库增重；
+# conf/（含项目自己的 nginx.conf：8080 -> 8081 转发）和 html/xhw/（前端源码与图片）
+# 是这个项目的一部分，必须留。
+# 写法上刻意逐条列出、不用 `nginx-1.18.0/*` + `!` 取反 ——
+# gitignore 的取反规则要求父目录先不被忽略，很容易写错，逐条最稳。
+nginx-1.18.0/nginx.exe
+nginx-1.18.0/docs/
+nginx-1.18.0/contrib/
+nginx-1.18.0/temp/
+nginx-1.18.0/logs/
+nginx-1.18.0/ifDel.lua
+nginx-1.18.0/nginx-kill.ps1
+# nginx 自带的默认页，和项目首页容易混淆
+nginx-1.18.0/html/index.html
+nginx-1.18.0/html/50x.html
+
+# 改版前的前端备份（11MB）：留在本地当还原点，不进仓库
+_frontend_origin_backup/

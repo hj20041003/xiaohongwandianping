@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>发笔记 · 小红碗</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="hd">
+    <button class="hd__btn hd__btn--txt" type="button" @click="goBack">取消</button>
+    <h1 class="hd__t">发笔记</h1>
+    <button class="hd__btn hd__btn--txt" type="button" @click="submit"
+            :disabled="submitting" :style="submitting ? 'opacity:.5' : 'color:var(--ticket)'">
+      {{ submitting ? "发送中" : "发布" }}
+    </button>
+  </header>
+
+  <main class="main main--nofoot">
+
+    <section class="sec">
+      <div class="sub">
+        照片 <span class="faint">最多 9 张，单张 5MB 以内</span>
+      </div>
+      <div class="upl">
+        <div class="upl__item" v-for="(f, i) in fileList" :key="f">
+          <img :src="f" :alt="'第 ' + (i + 1) + ' 张'">
+          <button class="upl__del" type="button" @click="removePic(i)" aria-label="删除这张">
+            <tk-icon name="close" :size="12"></tk-icon>
+          </button>
+        </div>
+        <div class="upl__busy" v-if="uploading">上传中…</div>
+        <button v-else-if="fileList.length < 9" class="upl__btn" type="button" @click="pickFile">
+          <tk-icon name="camera" :size="20"></tk-icon>
+          <span>上传照片</span>
+        </button>
+      </div>
+      <input ref="file" type="file" accept="image/*" style="display:none" @change="onFilePicked">
+    </section>
+
+    <section class="sec">
+      <label class="fld">
+        <span class="fld__lb">标题</span>
+        <input class="inp" v-model="form.title" maxlength="40"
+               placeholder="一句话说清这家店值不值得去">
+      </label>
+      <label class="fld" style="margin-bottom:0">
+        <span class="fld__lb">正文</span>
+        <textarea class="txa" v-model="form.content"
+                  placeholder="吃了什么、花了多少、服务怎么样、还想不想再来"></textarea>
+      </label>
+    </section>
+
+    <section class="sec">
+      <div class="sub">关联商户</div>
+      <div class="card">
+        <div class="row row--link" @click="sheet = true">
+          <span class="row__k">商户</span>
+          <span class="row__v" :class="{ faint: !selected.id }">
+            {{ selected.name || "去选择" }}
+          </span>
+          <tk-icon name="right" :size="15" class="row__chev"></tk-icon>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="note-box">
+        <span class="note-box__ic"><tk-icon name="info" :size="15"></tk-icon></span>
+        <span>发布后笔记会出现在<b>首页</b>和<b>我的主页</b>。关联了商户，别人在店铺页也能刷到。</span>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- 商户选择抽屉 -->
+  <template v-if="sheet">
+    <div class="mask" @click="sheet = false"></div>
+    <div class="sheet" role="dialog" aria-label="选择商户">
+      <div class="sheet__hd">
+        <span class="sheet__t">选择商户</span>
+        <button class="hd__btn" type="button" @click="sheet = false" aria-label="关闭">
+          <tk-icon name="close" :size="18"></tk-icon>
+        </button>
+      </div>
+      <div style="padding:12px 16px;border-bottom:1.5px solid var(--rule)">
+        <form class="search" @submit.prevent="queryShops">
+          <span class="search__ico"><tk-icon name="search" :size="16"></tk-icon></span>
+          <input v-model.trim="shopName" placeholder="输入商户名，回车搜索" aria-label="商户名">
+        </form>
+      </div>
+      <div class="sheet__bd">
+        <div class="pick" v-for="s in shops" :key="s.id" @click="selectShop(s)">
+          <span class="pick__ph"><img :src="util.firstImage(s.images)" :alt="s.name" loading="lazy"></span>
+          <span class="pick__bd">
+            <span class="pick__t ellip">{{ s.name }}</span>
+            <span class="pick__s ellip">{{ s.area }}<template v-if="s.avgPrice"> · 人均 {{ s.avgPrice }} 元</template></span>
+          </span>
+          <tk-icon name="right" :size="15" class="row__chev"></tk-icon>
+        </div>
+        <div class="empty" v-if="!shops.length">
+          <div class="empty__ic"><tk-icon name="search" :size="22"></tk-icon></div>
+          <div class="empty__t">没搜到这家店</div>
+          <div class="empty__d">换个关键词试试</div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+var MAX_PIC = 9;
+var MAX_SIZE = 5 * 1024 * 1024;
+
+new Vue({
+  el: "#app",
+  data: {
+    util: util,
+    form: { title: "", content: "" },
+    fileList: [],
+    uploading: false,
+    submitting: false,
+    sheet: false,
+    shops: [],
+    shopName: "",
+    selected: {}
+  },
+
+  created: function () {
+    // 未登录直接送去登录页，回来还能接着写
+    if (!util.requireLogin()) return;
+    this.queryShops();
+  },
+
+  methods: {
+    goBack: function () { util.back(); },
+
+    queryShops: function () {
+      var self = this;
+      axios.get("/shop/of/name", { params: { name: this.shopName, current: 1 } })
+        .then(function (res) { self.shops = res.data || []; })
+        .catch(function (e) { self.$message.error(e); });
+    },
+
+    selectShop: function (s) {
+      this.selected = s;
+      this.sheet = false;
+    },
+
+    pickFile: function () { this.$refs.file.click(); },
+
+    onFilePicked: function (e) {
+      var input = e.target;
+      var f = input.files && input.files[0];
+      input.value = "";              // 清空，方便连续选同一张
+      if (!f) return;
+
+      if (!/^image\//.test(f.type)) { this.$message.error("只能传图片"); return; }
+      if (f.size > MAX_SIZE) { this.$message.error("单张别超过 5MB"); return; }
+      if (this.fileList.length >= MAX_PIC) { this.$message.error("最多 9 张"); return; }
+
+      var self = this;
+      var fd = new FormData();
+      fd.append("file", f);
+      this.uploading = true;
+
+      // 不要手动设 Content-Type：multipart 的 boundary 必须由浏览器生成，
+      // 原代码写死了一个假 boundary，服务端根本解析不了这个请求体。
+      axios.post("/upload/blog", fd)
+        .then(function (res) {
+          self.fileList.push(util.imgPath(res.data));
+        })
+        .catch(this.$message.error)
+        .then(function () { self.uploading = false; });
+    },
+
+    removePic: function (i) {
+      var path = this.fileList[i];
+      // 先从界面撤掉：服务端删文件失败也不该卡住用户继续编辑
+      this.fileList.splice(i, 1);
+      axios.get("/upload/blog/delete", {
+        // 服务端落盘目录是 .../imgs，所以要剥掉 /imgs 前缀
+        params: { name: String(path).replace(/^\/imgs/, "") }
+      }).catch(function () {});
+    },
+
+    submit: function () {
+      if (!util.hasToken()) { util.requireLogin(); return; }
+
+      var title = (this.form.title || "").trim();
+      var content = (this.form.content || "").trim();
+      if (!title) { this.$message.error("还没写标题"); return; }
+      if (!content) { this.$message.error("正文还是空的"); return; }
+      if (!this.selected.id) { this.$message.error("选一个关联商户"); return; }
+      if (this.uploading) { this.$message.info("图片还在上传，稍等一下"); return; }
+      if (this.submitting) return;
+
+      var self = this;
+      this.submitting = true;
+      axios.post("/blog", {
+        title: title,
+        content: content,
+        images: this.fileList.join(","),
+        shopId: this.selected.id
+      })
+        .then(function () {
+          self.$message.success("已发布");
+          setTimeout(function () { util.go("/info.html"); }, 400);
+        })
+        .catch(this.$message.error)
+        .then(function () { self.submitting = false; });
+    }
+  }
+});
+</script>
+</body>
+</html>

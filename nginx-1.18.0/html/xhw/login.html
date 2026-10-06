@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>登录 · 小红碗</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<div id="app">
+  <header class="hd">
+    <button class="hd__btn" type="button" @click="goBack" aria-label="返回">
+      <tk-icon name="back" :size="20"></tk-icon>
+    </button>
+    <h1 class="hd__t"></h1>
+    <span class="hd__spacer"></span>
+  </header>
+
+  <main class="main main--nofoot">
+    <div class="login-wrap">
+      <div class="login-brand">小红碗</div>
+      <div class="login-sub">验证码登录。没注册过的手机号会自动建号。</div>
+
+      <div class="login-form">
+        <div class="fld">
+          <label class="fld__lb" for="phone">手机号</label>
+          <div class="fld__row">
+            <input id="phone" class="inp inp--num" v-model.trim="form.phone"
+                   type="tel" inputmode="numeric" maxlength="11" autocomplete="tel"
+                   placeholder="11 位手机号">
+            <button class="btn btn--g" type="button"
+                    :disabled="counting" @click="sendCode">
+              {{ btnMsg }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 后端关了短信限流：说清楚，否则"能反复点"会让人以为是 bug -->
+        <div class="devhint" v-if="skipSmsLimit">
+          <span class="devhint__ic"><tk-icon name="info" :size="13"></tk-icon></span>
+          <span>
+            本地开发：<b>短信限流已关闭</b>
+            （<span class="num">xhw.dev-skip-sms-limit=true</span>），
+            同一个手机号可以反复取码，每次都是新验证码。
+          </span>
+        </div>
+
+        <div class="fld">
+          <label class="fld__lb" for="code">验证码</label>
+          <input id="code" class="inp inp--num" v-model.trim="form.code"
+                 type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code"
+                 placeholder="6 位数字">
+        </div>
+
+        <button class="btn btn--p btn--full" type="button" @click="login"
+                :disabled="submitting">
+          {{ submitting ? "登录中…" : "登录" }}
+        </button>
+      </div>
+
+      <label class="chk" style="margin-top:18px">
+        <input type="checkbox" v-model="agreed">
+        <span class="chk__box"><tk-icon name="check" :size="12"></tk-icon></span>
+        <span>我已阅读并同意<a href="javascript:void(0)">《小红碗用户服务协议》</a>和<a href="javascript:void(0)">《隐私政策》</a></span>
+      </label>
+
+      <!-- 开发环境：后端把验证码直接给过来了，显示出来并已自动填入 -->
+      <div class="devcode" v-if="devCode">
+        <div class="devcode__lb">开发环境 · 验证码已自动填入</div>
+        <div class="devcode__row">
+          <span class="devcode__v">{{ devCode }}</span>
+          <button class="btn btn--g btn--sm" type="button" @click="useDevCode">填入</button>
+        </div>
+        <div class="devcode__tip">
+          来自后端取码接口（<b>xhw.dev-login-code=true</b>）。
+          部署到别人能访问的环境前记得关掉这个开关。
+        </div>
+      </div>
+
+      <!-- 取码接口关着（或调用失败）时的退路，说清楚码去哪儿找 -->
+      <div class="note-box" style="margin-top:22px" v-else>
+        <span class="note-box__ic"><tk-icon name="info" :size="15"></tk-icon></span>
+        <span>
+          演示环境不连短信网关，<b>验证码打印在后端控制台</b>。
+          也可以在 Redis 里直接取：<span class="num">GET login:code:{{ form.phone || "手机号" }}</span>
+        </span>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+/* 手机号：11 位、1 开头、第二位 3~9。
+   必须和后端 RegexPatterns.PHONE_REGEX 保持一致——两边规则不一样会出现
+   "前端放行、请求也发出去了，后端才回一句手机号格式错误"的情况，
+   用户根本不知道哪儿不对。（这个坑真实踩过，别再各写各的。） */
+var PHONE_RE = /^1[3-9]\d{9}$/;
+
+new Vue({
+  el: "#app",
+  data: {
+    form: { phone: "", code: "" },
+    agreed: false,
+    counting: false,
+    left: 0,
+    timer: null,
+    submitting: false,
+    /* 开发环境取码接口拿回来的验证码。为空 = 接口关着，页面退回 note-box 提示。 */
+    devCode: "",
+    /* 后端有没有关掉短信限流（xhw.dev-skip-sms-limit）。
+       后端都不限流了、前端还把按钮锁 60 秒，就是自相矛盾：想再要一个验证码只能干等。
+       进页面时问一次 /user/dev-settings 拿这个值；拿不到就保持 false（按真实限流来）。 */
+    skipSmsLimit: false
+  },
+
+  computed: {
+    btnMsg: function () {
+      return this.counting ? this.left + " 秒后重发" : "获取验证码";
+    }
+  },
+
+  created: function () {
+    this.loadDevSettings();
+  },
+
+  beforeDestroy: function () {
+    if (this.timer) clearInterval(this.timer);
+  },
+
+  methods: {
+    goBack: function () { util.back(); },
+
+    /* 问一下后端的开发开关。线上没这个开关时它回的还是两个 false，
+       所以正常情况下这里拿到的就是"照常限流"，不会误判成不限流。 */
+    loadDevSettings: function () {
+      var self = this;
+      axios.get("/user/dev-settings", { silent401: true })
+        .then(function (res) {
+          var s = res.data || {};
+          self.skipSmsLimit = !!s.skipSmsLimit;
+          // 极端情况：设置还没回来用户就点了发码、按钮已经锁上。
+          // 一旦确认限流是关的，就把锁撤掉。
+          if (self.skipSmsLimit && self.timer) {
+            clearInterval(self.timer);
+            self.timer = null;
+            self.counting = false;
+          }
+        })
+        .catch(function () { self.skipSmsLimit = false; });
+    },
+
+    sendCode: function () {
+      var phone = (this.form.phone || "").trim();
+      if (!PHONE_RE.test(phone)) { this.$message.error("手机号看着不对"); return; }
+      if (this.counting) return;
+
+      var self = this;
+      // 换号以后旧的验证码就没意义了，先清掉
+      this.devCode = "";
+
+      axios.post("/user/code", null, { params: { phone: phone } })
+        .then(function () {
+          // 后端关掉限流时就不锁按钮了，方便反复取码调试
+          if (!self.skipSmsLimit) self.startCountdown();
+          // 发码成功后顺便问一下后端要验证码（仅本地开发有这个接口）。
+          return self.fetchDevCode(phone).then(function (got) {
+            // 取码接口关着（真实模式）：得说一声码去哪看，否则点完一点反馈都没有
+            if (!got) self.$message.success("验证码已生成，去后端控制台看");
+          });
+        })
+        .catch(function (err) {
+          // 被限流拒了。这时"上一个码"可能还没过期，先把它捞回来用，
+          // 比只弹一句报错有用得多。
+          return self.fetchDevCode(phone).then(function (got) {
+            if (!got) self.$message.error(err);
+          });
+        });
+    },
+
+    /* 开发环境：把验证码拿回来直接显示 + 自动填入，省得去控制台翻。
+       返回 true = 拿到了码；接口关着 / 不存在 / 已过期一律返回 false。 */
+    fetchDevCode: function (phone) {
+      var self = this;
+      return axios.get("/user/code/dev", { params: { phone: phone }, silent401: true })
+        .then(function (res) {
+          var code = res.data;
+          if (!code) return false;
+          self.devCode = code;
+          self.form.code = code;          // 直接填好，点一下登录就行
+          self.$message.success("验证码 " + code + "，已自动填入");
+          return true;
+        })
+        .catch(function () {
+          self.devCode = "";
+          return false;
+        });
+    },
+
+    useDevCode: function () {
+      if (this.devCode) this.form.code = this.devCode;
+    },
+
+    startCountdown: function () {
+      var self = this;
+      this.counting = true;
+      this.left = 60;
+      this.timer = setInterval(function () {
+        self.left -= 1;
+        if (self.left <= 0) {
+          clearInterval(self.timer);
+          self.timer = null;
+          self.counting = false;
+        }
+      }, 1000);
+    },
+
+    login: function () {
+      if (!this.agreed) { this.$message.error("先勾选同意用户协议"); return; }
+      if (!PHONE_RE.test((this.form.phone || "").trim())) { this.$message.error("手机号看着不对"); return; }
+      if (!this.form.code) { this.$message.error("验证码还没填"); return; }
+      if (this.submitting) return;
+
+      var self = this;
+      this.submitting = true;
+      axios.post("/user/login", { phone: this.form.phone, code: this.form.code })
+        .then(function (res) {
+          // data 就是一个 token 字符串，不是对象
+          if (res.data) sessionStorage.setItem("token", res.data);
+          var from = util.param("from");
+          util.go(from || "/index.html");
+        })
+        .catch(this.$message.error)
+        .then(function () { self.submitting = false; });
+    }
+  }
+});
+</script>
+</body>
+</html>

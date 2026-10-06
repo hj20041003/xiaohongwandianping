@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>我的资料 · 小红碗</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="hd">
+    <button class="hd__btn" type="button" @click="goBack" aria-label="返回">
+      <tk-icon name="back" :size="20"></tk-icon>
+    </button>
+    <h1 class="hd__t">我的资料</h1>
+    <button class="hd__btn hd__btn--txt" type="button" @click="save"
+            :disabled="saving" :style="saving ? 'opacity:.5' : 'color:var(--ticket)'">
+      {{ saving ? "保存中" : "保存" }}
+    </button>
+  </header>
+
+  <main class="main main--nofoot">
+
+    <!-- 头像：点一下换一张 -->
+    <div class="prof">
+      <button class="av av--xl av--edit" type="button" @click="$refs.pic.click()"
+              :disabled="uploading" aria-label="更换头像">
+        <img :src="iconPreview" :alt="form.nickName || '头像'">
+        <span class="av--edit__mask">
+          <tk-icon :name="uploading ? 'clock' : 'camera'" :size="20"></tk-icon>
+        </span>
+      </button>
+      <div class="prof__bd">
+        <div class="prof__nm ellip">{{ form.nickName || "还没有昵称" }}</div>
+        <div class="prof__id num">{{ memberNo }}</div>
+        <div class="t-sm faint" style="margin-top:5px">
+          {{ uploading ? "头像上传中…" : "点头像换一张" }}
+        </div>
+      </div>
+    </div>
+    <input ref="pic" type="file" accept="image/*" style="display:none" @change="onPicPicked">
+
+    <section class="sec">
+      <div class="sec__hd"><h2 class="sec__t">档案</h2></div>
+
+      <label class="fld">
+        <span class="fld__lb">昵称</span>
+        <input class="inp" v-model="form.nickName" maxlength="32"
+               placeholder="别人在评论和笔记里看到的名字">
+      </label>
+
+      <div class="fld">
+        <span class="fld__lb">性别</span>
+        <div class="chips">
+          <button class="chip" type="button" v-for="g in genders" :key="g.k"
+                  :class="{ on: genderKey === g.k }" @click="genderKey = g.k">{{ g.t }}</button>
+        </div>
+      </div>
+
+      <div class="fld">
+        <span class="fld__lb">生日</span>
+        <input class="inp inp--num" type="date" v-model="form.birthday"
+               :max="today" min="1900-01-01">
+      </div>
+
+      <div class="fld">
+        <span class="fld__lb">城市</span>
+        <div class="card">
+          <div class="row row--link" @click="picker = true">
+            <span class="row__k">所在城市</span>
+            <span class="row__v" :class="{ faint: !form.city }">{{ form.city || "去选择" }}</span>
+            <tk-icon name="right" :size="15" class="row__chev"></tk-icon>
+          </div>
+        </div>
+      </div>
+
+      <label class="fld" style="margin-bottom:0">
+        <span class="fld__lb">个人简介</span>
+        <textarea class="txa" v-model="form.introduce" maxlength="128"
+                  style="min-height:88px"
+                  placeholder="一句话介绍自己，比如「爱吃辣，探店只去本地人排队的店」"></textarea>
+        <span class="fld__n num">{{ (form.introduce || "").length }}/128</span>
+      </label>
+    </section>
+
+    <section class="sec">
+      <div class="sec__hd"><h2 class="sec__t">我的记录</h2></div>
+      <div class="rows card">
+        <div class="row row--static">
+          <span class="row__k">笔记</span>
+          <span class="row__v num">{{ blogCount }} 篇</span>
+        </div>
+        <div class="row row--static">
+          <span class="row__k">连续签到</span>
+          <span class="row__v num">{{ signCount }} 天</span>
+        </div>
+        <div class="row row--static">
+          <span class="row__k">积分</span>
+          <span class="row__v num">{{ info.credits || 0 }}</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="note-box">
+        <span class="note-box__ic"><tk-icon name="info" :size="15"></tk-icon></span>
+        <span>
+          昵称、头像、城市、性别、生日、简介都能改，点右上角<b>保存</b>。
+          用户编号是系统给的，改不了。
+        </span>
+      </div>
+    </section>
+
+    <section class="sec">
+      <button class="btn btn--p btn--full" type="button"
+              :disabled="saving" @click="save">
+        {{ saving ? "保存中…" : "保存" }}
+      </button>
+    </section>
+
+  </main>
+
+  <!-- 城市只用得到「市」这一级（tb_user_info.city 只有一个字段），
+       所以用三级选择器但拿到城就够了 -->
+  <tk-region :open="picker" :value="{ province: '', city: form.city, district: '' }"
+             @change="onCity" @close="picker = false"></tk-region>
+
+  <foot-bar :active-btn="4"></foot-bar>
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+/* 头像上传的大小上限，和发笔记那边保持一致 */
+var MAX_SIZE = 5 * 1024 * 1024;
+
+new Vue({
+  el: "#app",
+  data: {
+    util: util,
+    user: {},
+    info: {},
+    signCount: 0,
+    blogCount: 0,
+    picker: false,
+    saving: false,
+    uploading: false,
+    today: "",
+    // 性别用字符串键驱动 UI：null（保密）在模板里不好判断，
+    // 而且 tb_user_info.gender 是 Boolean，"false（男）"和"没填过"必须分得开
+    genderKey: "",
+    form: { nickName: "", icon: "", city: "", birthday: "", introduce: "" }
+  },
+
+  computed: {
+    memberNo: function () { return util.no(this.user.id, 6); },
+    /* 还没上传新头像时显示服务端的，上传完立刻显示新的。
+       注意头像是 tb_user 上的字段（不是 tb_user_info），别取错对象 */
+    iconPreview: function () { return util.iconUrl(this.form.icon || this.user.icon); },
+    genders: function () {
+      return [{ k: "m", t: "男" }, { k: "f", t: "女" }, { k: "", t: "保密" }];
+    }
+  },
+
+  created: function () {
+    var d = new Date();
+    this.today = d.getFullYear() + "-" + util.pad2(d.getMonth() + 1) + "-" + util.pad2(d.getDate());
+    this.load();
+  },
+
+  methods: {
+    goBack: function () { util.back(); },
+
+    load: function () {
+      var self = this;
+      return axios.get("/user/me")
+        .then(function (res) {
+          self.user = res.data || {};
+          self.form.nickName = self.user.nickName || "";
+          self.form.icon = self.user.icon || "";
+          return axios.get("/user/info/" + self.user.id).catch(function () { return { data: {} }; });
+        })
+        .then(function (res) {
+          self.info = res.data || {};
+          // 服务端返回的是 Boolean：true = 女、false = 男、缺字段 = 没填过。
+          // 所以不能写 `if (info.gender)` —— 那是"男"和"没填"分不开。
+          var g = self.info.gender;
+          self.genderKey = g === true ? "f" : g === false ? "m" : "";
+          self.form.city = self.info.city || "";
+          self.form.birthday = self.info.birthday || "";
+          self.form.introduce = self.info.introduce || "";
+          return axios.get("/user/sign/count").catch(function () { return { data: 0 }; });
+        })
+        .then(function (res) {
+          self.signCount = Number(res.data) || 0;
+          return axios.get("/blog/of/me").catch(function () { return { data: [] }; });
+        })
+        .then(function (res) { self.blogCount = (res.data || []).length; })
+        .catch(function (e) { self.$message.error(e); });
+    },
+
+    onCity: function (r) {
+      this.picker = false;
+      if (!r.city) {
+        this.form.city = "";
+        return;
+      }
+      this.form.city = r.city;
+    },
+
+    onPicPicked: function (e) {
+      var input = e.target;
+      var f = input.files && input.files[0];
+      input.value = "";           // 清空，方便连着选同一张
+      if (!f) return;
+      if (!/^image\//.test(f.type)) { this.$message.error("只能传图片"); return; }
+      if (f.size > MAX_SIZE) { this.$message.error("头像别超过 5MB"); return; }
+
+      var self = this;
+      var fd = new FormData();
+      fd.append("file", f);
+      this.uploading = true;
+      // 不要手动设 Content-Type：multipart 的 boundary 必须由浏览器生成
+      axios.post("/upload/blog", fd)
+        .then(function (res) {
+          self.form.icon = res.data;      // 服务端回的是 /blogs/... 这种相对路径
+          self.$message.success("头像已上传，别忘了点保存");
+        })
+        .catch(this.$message.error)
+        .then(function () { self.uploading = false; });
+    },
+
+    /* 昵称/头像在 tb_user 上，城市/性别/生日/简介在 tb_user_info 上，是两个接口。
+       分开写是刻意的：它们本来就是两张表，硬凑一个接口反而要在服务端做字段分发。 */
+    save: function () {
+      if (this.saving) return;
+      var nick = (this.form.nickName || "").trim();
+      if (!nick) { this.$message.error("昵称不能为空"); return; }
+
+      var self = this;
+      this.saving = true;
+      axios.put("/user/me", { nickName: nick, icon: this.form.icon || "" })
+        .then(function () {
+          return axios.put("/user/info", {
+            city: (self.form.city || "").trim(),
+            // 空字符串要变成 null：tb_user_info.gender 是 Boolean，
+            // 传 "" 过去 Jackson 转不了；传 null 才是"没填"
+            gender: self.genderKey === "f" ? true : self.genderKey === "m" ? false : null,
+            birthday: self.form.birthday || null,
+            introduce: (self.form.introduce || "").trim()
+          });
+        })
+        .then(function () {
+          self.$message.success("已保存");
+          // 重新拉一次：以服务端存下来的为准，而不是以表单里填的为准
+          return self.load();
+        })
+        .catch(function (e) {
+          self.$message.error(e);
+        })
+        .then(function () { self.saving = false; });
+    }
+  }
+});
+</script>
+</body>
+</html>

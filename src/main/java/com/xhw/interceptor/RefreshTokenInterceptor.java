@@ -1,0 +1,60 @@
+package com.xhw.interceptor;
+
+import cn.hutool.core.bean.BeanUtil;
+import com.baomidou.mybatisplus.core.toolkit.StringUtils;
+import com.xhw.dto.UserDTO;
+import com.xhw.utils.RedisConstants;
+import com.xhw.utils.UserHolder;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.web.servlet.HandlerInterceptor;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * 刷新令牌拦截器
+ *
+ * @author CHEN
+ * @date 2022/10/07
+ */
+public class RefreshTokenInterceptor implements HandlerInterceptor {
+    private final StringRedisTemplate stringRedisTemplate;
+
+    public RefreshTokenInterceptor(StringRedisTemplate stringRedisTemplate) {
+        this.stringRedisTemplate = stringRedisTemplate;
+    }
+
+    @Override
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        //从请求头中获取token
+        String token = request.getHeader("authorization");
+        if (StringUtils.isEmpty(token)) {
+            //不存在token
+            return true;
+        }
+        //从redis中获取用户
+        Map<Object, Object> userMap =
+                stringRedisTemplate.opsForHash()
+                        .entries(RedisConstants.LOGIN_USER_KEY + token);
+        //用户不存在
+        if (userMap.isEmpty()) {
+            return true;
+        }
+        //hash转UserDTO存入ThreadLocal
+        UserHolder.saveUser(BeanUtil.fillBeanWithMap(userMap, new UserDTO(), false));
+        // token 也存一份：改昵称/头像时要拿它去刷 Redis 里那个 hash（见 UserHolder 的注释）
+        UserHolder.saveToken(token);
+        //token续命
+        stringRedisTemplate.expire(RedisConstants.LOGIN_USER_KEY + token, RedisConstants.LOGIN_USER_TTL, TimeUnit.MINUTES);
+        return true;
+    }
+
+    @Override
+    public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) throws Exception {
+        UserHolder.removeUser();
+        // ThreadLocal 不清会在复用线程的容器里串请求（下个请求可能读到上个用户的 token）
+        UserHolder.removeToken();
+    }
+}

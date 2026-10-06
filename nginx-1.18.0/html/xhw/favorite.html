@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>我的收藏 · 小红碗</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="hd">
+    <button class="hd__btn" type="button" @click="goBack" aria-label="返回">
+      <tk-icon name="back" :size="20"></tk-icon>
+    </button>
+    <h1 class="hd__t">我的收藏</h1>
+    <span class="hd__spacer"></span>
+  </header>
+
+  <main class="main main--nofoot">
+
+    <div class="shops tk-in" v-if="blogs.length">
+      <a class="shop" v-for="b in blogs" :key="b.id" :href="'/blog-detail.html?id=' + b.id">
+        <span class="shop__ph">
+          <img :src="b.cover" :alt="b.title" loading="lazy">
+        </span>
+        <span class="shop__bd">
+          <span class="shop__t clamp2">{{ b.title }}</span>
+          <span class="shop__meta">
+            <tk-icon name="thumb" :size="13"></tk-icon>
+            <span class="num">{{ b.liked || 0 }}</span>
+            <span class="sep">·</span>
+            <tk-icon name="comment" :size="13"></tk-icon>
+            <span class="num">{{ b.comments || 0 }}</span>
+            <span class="sep">·</span>
+            <span class="num">{{ util.ago(b.createTime) }}</span>
+          </span>
+          <span class="shop__foot">
+            <span class="shop__no num">{{ util.no(b.id) }}</span>
+            <button class="fav-x" type="button" @click.stop="unfavorite(b)"
+                    :aria-label="'取消收藏《' + b.title + '》'">
+              <tk-icon name="close" :size="13"></tk-icon>取消收藏
+            </button>
+          </span>
+        </span>
+      </a>
+
+      <button class="btn btn--g btn--full" type="button" v-if="more" @click="loadMore"
+              :disabled="loading">看更早的</button>
+    </div>
+
+    <div class="empty" v-else-if="loaded">
+      <div class="empty__ic"><tk-icon name="star" :size="24"></tk-icon></div>
+      <div class="empty__t">还没有收藏</div>
+      <div class="empty__d">
+        在笔记详情页点星标就能收进来，之后随时回来看
+      </div>
+      <div class="empty__act">
+        <a class="btn btn--p btn--sm" href="/index.html">去首页逛逛</a>
+      </div>
+    </div>
+
+    <div class="shops" v-else>
+      <div class="shop" v-for="i in 3" :key="i">
+        <div class="sk" style="flex:0 0 96px;width:96px;height:96px;border-radius:3px"></div>
+        <div class="shop__bd">
+          <div class="sk sk--line" style="width:70%"></div>
+          <div class="sk sk--line" style="width:45%;margin-top:10px"></div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <foot-bar :active-btn="4"></foot-bar>
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+/* 一页 5 条（和后端 SystemConstants.MAX_PAGE_SIZE 一致），
+   "看更早的" 靠"这一页没攒满"判断到底了没有。 */
+var PAGE = 5;
+
+new Vue({
+  el: "#app",
+  data: {
+    util: util,
+    blogs: [],
+    current: 1,
+    loaded: false,
+    loading: false
+  },
+
+  computed: {
+    more: function () { return this.blogs.length % PAGE === 0 && this.blogs.length > 0; }
+  },
+
+  created: function () {
+    this.load(true);
+  },
+
+  methods: {
+    goBack: function () { util.back(); },
+
+    load: function (reset) {
+      var self = this;
+      if (reset) this.current = 1;
+      this.loading = true;
+      return axios.get("/blog/of/favorite", { params: { current: this.current } })
+        .then(function (res) {
+          // 后端直接回 Blog 列表（和 /blog/of/me 一个形状），封面要自己取
+          var list = (res.data || []).map(function (b) {
+            b.cover = util.firstImage(b.images);
+            return b;
+          });
+          self.blogs = reset ? list : self.blogs.concat(list);
+          self.loaded = true;
+        })
+        .catch(function (e) {
+          self.loaded = true;
+          self.$message.error(e);
+        })
+        .then(function () { self.loading = false; });
+    },
+
+    loadMore: function () {
+      this.current += 1;
+      this.load(false);
+    },
+
+    unfavorite: function (b) {
+      var self = this;
+      // 先从列表里拿掉，失败了再放回去 —— 收藏取消是纯本地可见的操作
+      var idx = this.blogs.indexOf(b);
+      this.blogs.splice(idx, 1);
+      axios.delete("/blog/" + b.id + "/favorite")
+        .then(function () { self.$message.success("已取消收藏"); })
+        .catch(function (e) {
+          self.blogs.splice(idx, 0, b);   // 放回原位
+          self.$message.error(e);
+        });
+    }
+  }
+});
+</script>
+</body>
+</html>

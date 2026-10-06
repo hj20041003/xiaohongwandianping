@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>我的订单 · 小红碗</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="hd">
+    <button class="hd__btn" type="button" @click="goBack" aria-label="返回">
+      <tk-icon name="back" :size="20"></tk-icon>
+    </button>
+    <h1 class="hd__t">我的订单</h1>
+    <span class="hd__spacer"></span>
+  </header>
+
+  <main class="main main--nofoot">
+
+    <div class="tabs">
+      <button class="tabs__i" type="button" v-for="t in tabs" :key="t.k"
+              :class="{ on: tab === t.k }" @click="switchTab(t.k)">
+        {{ t.t }}<span class="num tabs__n" v-if="countOf(t.k)">{{ countOf(t.k) }}</span>
+      </button>
+    </div>
+
+    <div class="ords" v-if="shown.length">
+      <article class="ord" v-for="o in shown" :key="o.id">
+        <div class="ord__hd">
+          <a class="ord__shop ellip" :href="'/shop-detail.html?id=' + o.shopId">
+            <tk-icon name="pin" :size="14"></tk-icon>{{ o.shopName }}
+          </a>
+          <span class="ord__st" :class="'ord__st--' + o.status">{{ o.statusText }}</span>
+        </div>
+
+        <a class="ord__bd" :href="'/shop-detail.html?id=' + o.shopId">
+          <div class="ord__t ellip">{{ o.voucherTitle || "券已下架" }}</div>
+          <div class="ord__s ellip">{{ o.voucherSubTitle }}</div>
+        </a>
+
+        <div class="ord__ft">
+          <span class="ord__time num">{{ util.ago(o.createTime) }}下单</span>
+          <span class="ord__amt">
+            实付 <b class="num">￥{{ yuan(o.payValue) }}</b>
+            <template v-if="o.actualValue">
+              · 抵 <span class="num">￥{{ yuan(o.actualValue) }}</span>
+            </template>
+          </span>
+          <button class="btn btn--p btn--sm" type="button" v-if="o.payable && !paying"
+                  @click.stop="pay(o)">去支付</button>
+          <span class="ord__pay" v-else-if="o.payTypeText">
+            {{ o.payTypeText }} · {{ util.ago(o.payTime) }}支付
+          </span>
+        </div>
+      </article>
+
+      <button class="btn btn--g btn--full" type="button" v-if="more" @click="loadMore"
+              :disabled="loading">看更早的</button>
+      <div class="t-sm faint" style="text-align:center;padding:14px 0" v-else-if="shown.length">
+        没有更多了
+      </div>
+    </div>
+
+    <div class="empty" v-else-if="loaded && tab === 'all'">
+      <div class="empty__ic"><tk-icon name="ticket" :size="24"></tk-icon></div>
+      <div class="empty__t">还没有订单</div>
+      <div class="empty__d">
+        去店铺页抢张代金券，秒杀券每天 10:00 开抢
+      </div>
+      <div class="empty__act">
+        <a class="btn btn--p btn--sm" href="/shop-list.html?type=1&amp;name=%E7%BE%8E%E9%A3%9F">去逛店</a>
+      </div>
+    </div>
+
+    <div class="empty" v-else-if="loaded">
+      <div class="empty__ic"><tk-icon name="ticket" :size="24"></tk-icon></div>
+      <div class="empty__t">这一类还没有订单</div>
+    </div>
+
+    <div class="ords" v-else>
+      <div class="ord" v-for="i in 3" :key="i">
+        <div class="sk sk--line" style="width:45%"></div>
+        <div class="sk sk--line" style="width:80%;margin-top:10px"></div>
+        <div class="sk sk--line" style="width:60%;margin-top:10px"></div>
+      </div>
+    </div>
+
+    <section class="sec">
+      <div class="note-box">
+        <span class="note-box__ic"><tk-icon name="info" :size="15"></tk-icon></span>
+        <span>
+          这里的「支付」是<b>模拟</b>的：项目没接任何支付网关。
+          另一个要注意的点：下单走的是 <b>Redis Stream 异步落库</b>，
+          刚抢完立刻刷新，订单可能还没入库 —— 稍等一两秒再刷新就有了。
+        </span>
+      </div>
+    </section>
+
+  </main>
+
+  <foot-bar :active-btn="4"></foot-bar>
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+/* 一页 8 条，和后端 Page<>(current, 8) 对齐 */
+var PAGE = 8;
+
+new Vue({
+  el: "#app",
+  data: {
+    util: util,
+    all: [],
+    current: 1,
+    tab: "all",
+    loaded: false,
+    loading: false,
+    paying: false,
+    tabs: [
+      { k: "all", t: "全部" },
+      { k: "1", t: "待支付" },
+      { k: "2", t: "已支付" }
+    ]
+  },
+
+  computed: {
+    shown: function () {
+      if (this.tab === "all") return this.all;
+      var t = this.tab;
+      return this.all.filter(function (o) { return String(o.status) === t; });
+    },
+    /** 后端只回 records，靠"这一页没攒满"判断到底了没有 */
+    more: function () { return this.all.length % PAGE === 0 && this.all.length > 0; }
+  },
+
+  created: function () {
+    this.load(true);
+  },
+
+  methods: {
+    goBack: function () { util.back(); },
+
+    /** 分转元。库里存的是分（避免浮点误差），页面上要显示 47.5 */
+    yuan: function (fen) {
+      if (fen === null || fen === undefined) return "0.00";
+      return (fen / 100).toFixed(2);
+    },
+
+    countOf: function (k) {
+      if (k === "all") return this.all.length;
+      return this.all.filter(function (o) { return String(o.status) === k; }).length;
+    },
+
+    switchTab: function (k) { this.tab = k; },
+
+    load: function (reset) {
+      var self = this;
+      if (reset) this.current = 1;
+      this.loading = true;
+      return axios.get("/voucher-order/my", { params: { current: this.current } })
+        .then(function (res) {
+          var list = res.data || [];
+          self.all = reset ? list : self.all.concat(list);
+          self.loaded = true;
+        })
+        .catch(function (e) {
+          self.loaded = true;
+          self.$message.error(e);
+        })
+        .then(function () { self.loading = false; });
+    },
+
+    loadMore: function () {
+      this.current += 1;
+      this.load(false);
+    },
+
+    pay: function (o) {
+      if (this.paying) return;
+      var self = this;
+      this.paying = true;
+      axios.post("/voucher-order/" + o.id + "/pay")
+        .then(function () {
+          self.$message.success("支付成功（模拟）");
+          return self.load(true);
+        })
+        .catch(function (e) { self.$message.error(e); })
+        .then(function () { self.paying = false; });
+    }
+  }
+});
+</script>
+</body>
+</html>

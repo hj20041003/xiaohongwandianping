@@ -1,0 +1,32 @@
+# ============================================================================
+#  H2 内存库 profile —— 只给「不想碰 MySQL」的场合用：
+#     零安装、重启即还原（回归脚本跑完不用清数据）
+#     java -jar target/xhw-1.0-SNAPSHOT.jar --spring.profiles.active=h2
+#
+#  和默认的 MySQL 配置是**同一套 SQL**（db/xhw.sql，MODE=MySQL 兼容），
+#  业务代码一行都不用改 —— 这也是当初选 H2 而不是换一套 schema 的原因。
+#
+#  什么时候必须用它：
+#    _qa/api_smoke.js      会发笔记、下秒杀单、上传图片
+#    _qa/address_*.js     会建地址、删地址
+#    跑在 MySQL 上会留下一堆"烟测笔记""秒杀订单"这类脏数据，
+#    清理麻烦，不如一开始就别往真库里写。
+# ============================================================================
+spring:
+  datasource:
+    # DB_CLOSE_DELAY=-1：内存库默认在**最后一个连接断开时**就销毁，
+    # 而本项目启动时预热缓存会开连接又关掉，那样数据库会当场消失。
+    driver-class-name: org.h2.Driver
+    url: jdbc:h2:mem:xhw;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=MySQL
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always
+      encoding: UTF-8
+      schema-locations: classpath:db/xhw.sql
+  h2:
+    console:
+      # 想直接看库里的数据：/h2-console，JDBC URL 填 jdbc:h2:mem:xhw，用户 sa，密码空
+      enabled: true
+      path: /h2-console

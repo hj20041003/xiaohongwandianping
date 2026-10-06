@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>小红碗 · 探店笔记与限时秒杀</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="hd hd--search">
+    <button class="hd__city" type="button" @click="picker = true"
+            :aria-label="'当前区域 ' + regionText + '，点击切换'">
+      <span class="ellip">{{ regionLabel }}</span><tk-icon name="down" :size="14"></tk-icon>
+    </button>
+    <form class="hd__s" @submit.prevent="doSearch">
+      <div class="search">
+        <span class="search__ico"><tk-icon name="search" :size="16"></tk-icon></span>
+        <input v-model.trim="keyword" placeholder="搜商户名、地点" aria-label="搜索商户">
+      </div>
+    </form>
+    <a class="hd__btn" href="/info.html" aria-label="我的主页">
+      <tk-icon name="user" :size="20"></tk-icon>
+    </a>
+  </header>
+
+  <!-- ⚠️ 这一层 <main class="main"> 不能省：
+       底部导航 .tk-ft 是 position: fixed，而 .main 带
+       padding-bottom: calc(var(--ft) + 28px)，专门给底栏让出高度。
+       少了它，页面最后一个元素会被底栏永久盖住（滚到底也露不出来）。_qa/html_lint.py 会检查。 -->
+  <main class="main">
+
+  <!-- 凭条抬头 -->
+  <div class="masthead">
+    <span class="masthead__l">小红碗</span>
+    <span class="masthead__r num">{{ today }}</span>
+  </div>
+
+  <nav class="cats tk-in" aria-label="店铺类型">
+    <a class="cat" v-for="t in types" :key="t.id" :href="catHref(t)">
+      <span class="cat__ic"><img :src="imgOf(t.icon)" :alt="t.name" loading="lazy"></span>
+      <span class="cat__t">{{ t.name }}</span>
+    </a>
+    <template v-if="!types.length">
+      <div class="cat" v-for="i in 8" :key="i">
+        <span class="sk" style="width:34px;height:34px;border-radius:4px"></span>
+        <span class="sk sk--line" style="width:70%;margin:6px 0 0"></span>
+      </div>
+    </template>
+  </nav>
+
+  <section class="sec">
+    <div class="sec__hd">
+      <h2 class="sec__t">达人探店</h2>
+      <span class="masthead__r">{{ regionLabel }} · {{ blogListTitle }}</span>
+    </div>
+
+    <!-- 排序 + 搜笔记。
+         搜笔记**不复用**顶部那个 keyword —— 那个绑的是「搜商户名、地点」
+         （走 /shop/of/name），两处搜索混在一个字段上会互相把对方的输入冲掉。 -->
+    <div class="blog-bar">
+      <div class="chips">
+        <button class="chip" type="button" v-for="o in sorts" :key="o.k"
+                :class="{ on: sort === o.k }" @click="switchSort(o.k)">{{ o.t }}</button>
+      </div>
+      <div class="srh">
+        <tk-icon name="search" :size="15"></tk-icon>
+        <input class="srh__in" v-model.trim="blogKeyword" placeholder="搜笔记"
+               aria-label="搜笔记" @keyup.enter="doSearch">
+        <button class="srh__x" type="button" v-if="blogKeyword" @click="clearSearch"
+                aria-label="清空搜索">清空</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="notes tk-in" v-if="blogs.length">
+    <article class="note" v-for="b in blogs" :key="b.id" @click="toBlog(b.id)">
+      <div class="note__ph">
+        <img :src="b.img" :alt="b.title" loading="lazy">
+        <!-- 只在「全国」视图下标城市：按区域筛过之后每条都来自同一片区域，再标是废话 -->
+        <span class="note__loc" v-if="isAll && b.city">
+          <tk-icon name="pin" :size="10"></tk-icon>{{ b.city }}
+        </span>
+      </div>
+      <h3 class="note__t clamp3">{{ b.title }}</h3>
+      <div class="note__shop ellip" v-if="b.shopName">
+        <tk-icon name="compass" :size="11"></tk-icon>{{ b.shopName }}
+      </div>
+      <div class="note__f">
+        <span class="av av--sm"><img :src="b.icon" :alt="b.name" loading="lazy"></span>
+        <span class="note__nm ellip">{{ b.name }}</span>
+        <button class="note__lk" :class="{ on: b.isLike }" type="button"
+                :aria-label="b.isLike ? '取消点赞' : '点赞'"
+                @click.stop="toggleLike(b)">
+          <tk-icon name="thumb" :size="14" :filled="!!b.isLike"></tk-icon>
+          <span class="num">{{ b.liked }}</span>
+        </button>
+      </div>
+    </article>
+  </div>
+
+  <div class="notes" v-else-if="!loaded">
+    <div class="note" v-for="i in 6" :key="i">
+      <div class="sk sk--ph"></div>
+      <div class="sk sk--line" style="margin:9px 10px 0"></div>
+      <div class="sk sk--line short" style="margin:6px 10px 0"></div>
+      <div style="height:16px"></div>
+    </div>
+  </div>
+
+  <div class="empty" v-else>
+    <div class="empty__ic"><tk-icon :name="blogKeyword ? 'search' : 'ticket'" :size="24"></tk-icon></div>
+    <div class="empty__t" v-if="blogKeyword">没搜到含「{{ blogKeyword }}」的笔记</div>
+    <div class="empty__t" v-else>{{ isAll ? "还没有人发笔记" : regionLabel + "还没有人发笔记" }}</div>
+    <div class="empty__d">{{ emptyDesc }}</div>
+    <div class="empty__act">
+      <button class="btn btn--g btn--sm" type="button" v-if="!isAll" @click="picker = true">
+        换个区域
+      </button>
+      <button class="btn btn--g btn--sm" type="button" v-if="!isAll && !hereHasShop && hotCity"
+              @click="gotoHot">去 {{ hotCity.name }}</button>
+      <a class="btn btn--p btn--sm" href="/blog-edit.html">写一篇</a>
+    </div>
+  </div>
+
+  <!-- 省 / 市 / 区 三级选择 -->
+  <tk-region :open="picker" :value="region"
+             @change="onRegion" @close="picker = false"></tk-region>
+
+  <div class="sentinel" ref="sentinel"></div>
+  </main>
+
+  <foot-bar :active-btn="1"></foot-bar>
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+/* 后端 /blog/hot 与 /blog/of/* 的分页大小都是 SystemConstants.MAX_PAGE_SIZE = 10。
+   返回条数不足 10 就说明没有下一页了。 */
+var PAGE_SIZE = 10;
+
+new Vue({
+  el: "#app",
+  data: {
+    // 省 / 市 / 区三级，存在 localStorage 里（换了页面、刷新了都还在）
+    region: { province: "", city: "", district: "" },
+    picker: false,
+    // 区划树 / 城市坐标表都是 util 里的**普通缓存**，不是响应式的。
+    // 计算属性直接读它们的话，第一次求值之后就被 Vue 缓存住了，
+    // 接口回来也不会重算 —— 表现就是「距离」按钮永远不出现。
+    // 所以用这两个响应式字段做"闸门"，让计算属性跟着它们一起重算。
+    regionsReady: false,
+    shopCount: 0,
+    today: "",
+    keyword: "",
+    types: [],
+    blogs: [],
+    current: 1,
+    loading: false,
+    loaded: false,
+    hasMore: true,
+    // 笔记区的排序与搜索。blogKeyword 刻意和顶部的 keyword 分开：
+    // 那个绑的是「搜商户名、地点」，共用一个字段会把对方的输入冲掉
+    sort: "hot",
+    sorts: [{ k: "hot", t: "最热" }, { k: "new", t: "最新" }],
+    blogKeyword: ""
+  },
+
+  computed: {
+    isAll: function () { return util.isAllRegion(this.region); },
+    /* 按钮上只显示最细的那一级：选了区就显示区，否则市，再否则省 */
+    regionLabel: function () { return util.regionLabel(this.region); },
+    regionText: function () { return util.regionText(this.region); },
+    /* 区块头右上角那半句：搜的时候说搜到几条，否则说当前排序 */
+    blogListTitle: function () {
+      if (this.blogKeyword) return "搜到 " + this.blogs.length + " 条";
+      return this.sort === "new" ? "最新" : "按人气";
+    },
+    /* 选中的这片区域里到底有没有门店。用来决定空状态该说什么话 */
+    hereHasShop: function () {
+      if (this.isAll) return true;
+      return this.shopCount > 0;
+    },
+    hotCity: function () {
+      var _ = this.regionsReady;      // 闸门：让这个计算属性跟着区划加载完成一起重算
+      return util.hotCities(1)[0] || null;
+    },
+    emptyDesc: function () {
+      if (this.isAll) return "第一篇探店笔记会出现在这里";
+      if (!this.hereHasShop) return "这座城市暂时还没有门店";
+      return "换个区域看看，或者自己写一篇";
+    }
+  },
+
+  created: function () {
+    var d = new Date();
+    this.today = d.getFullYear() + "." + util.pad2(d.getMonth() + 1) + "." + util.pad2(d.getDate());
+    this.region = util.getRegion();
+    // 区划树给选择器用，城市坐标表给 GEO 用，两个都要
+    var self = this;
+    Promise.all([util.loadRegions(), util.loadCities()]).then(function () {
+      self.regionsReady = true;
+      self.refreshShopCount();
+    });
+    this.queryTypes();
+    this.queryHot();
+  },
+
+  mounted: function () {
+    this.io = util.onBottom(this.$refs.sentinel, this.queryHot.bind(this));
+  },
+
+  beforeDestroy: function () {
+    if (this.io) this.io.disconnect();
+  },
+
+  methods: {
+    imgOf: function (p) { return util.imgPath(p); },
+
+    /* 分类入口带着当前区域走：从首页点「美食」进店铺列表，不该又跳回全国 */
+    catHref: function (t) {
+      var r = this.region;
+      return "/shop-list.html?type=" + t.id + "&name=" + encodeURIComponent(t.name) +
+        "&province=" + encodeURIComponent(r.province) +
+        "&city=" + encodeURIComponent(r.city) +
+        "&district=" + encodeURIComponent(r.district);
+    },
+
+    onRegion: function (r) {
+      var same = r.province === this.region.province &&
+                 r.city === this.region.city &&
+                 r.district === this.region.district;
+      this.region = util.setRegion(r);
+      this.picker = false;
+      this.refreshShopCount();
+      if (same) return;
+      // 区域变了，列表要整个重来，不能把两个区域的笔记拼在一屏里
+      this.resetHot();
+      this.queryHot();
+      if (!this.hereHasShop) {
+        if (this.hotCity) this.$message.info(r.city + " 还没有门店，可以先去 " + this.hotCity.name + " 逛逛");
+      } else if (util.regionLabel(r) !== util.ALL_CITY) {
+        this.$message.success("已切到" + util.regionText(r));
+      }
+    },
+
+    gotoHot: function () {
+      var h = this.hotCity;
+      if (!h) return;
+      this.onRegion({ province: h.province, city: h.name, district: "" });
+    },
+
+    /* 把「这片区域有多少门店」读成一个响应式字段，供计算属性用 */
+    refreshShopCount: function () {
+      this.shopCount = this.isAll ? 0 : util.cityCount(this.region.province, this.region.city);
+    },
+
+    resetHot: function () {
+      this.blogs = [];
+      this.current = 1;
+      this.hasMore = true;
+      this.loaded = false;
+    },
+
+    /** 换排序：清空重来，不然两种顺序会混在一条列表里 */
+    switchSort: function (k) {
+      if (this.sort === k) return;
+      this.sort = k;
+      this.resetHot();
+      this.queryHot();
+    },
+
+    doSearch: function () {
+      this.resetHot();
+      this.queryHot();
+    },
+
+    clearSearch: function () {
+      this.blogKeyword = "";
+      this.resetHot();
+      this.queryHot();
+    },
+
+    queryTypes: function () {
+      var self = this;
+      axios.get("/shop-type/list")
+        .then(function (res) { self.types = res.data || []; })
+        .catch(this.$message.error);
+    },
+
+    queryHot: function () {
+      if (this.loading || !this.hasMore) return;
+      var self = this;
+      var r = this.region;
+      var kw = (this.blogKeyword || "").trim();
+      this.loading = true;
+      // 有关键词走 /blog/search，没有走 /blog/hot。
+      // 两个接口的参数只差 keyword 和默认 sort，所以拼在一起传。
+      var url = kw ? "/blog/search" : "/blog/hot";
+      var params = {
+        current: this.current,
+        province: r.province,
+        city: r.city,
+        district: r.district
+      };
+      if (kw) params.keyword = kw;
+      // 搜索默认按最新（找人找东西最关心新不新），列表默认按人气
+      params.sort = kw ? "new" : this.sort;
+      axios.get(url, { params: params })
+        .then(function (res) {
+          var list = res.data || [];
+          var seen = {};
+          self.blogs.forEach(function (b) { seen[b.id] = 1; });
+          list.forEach(function (b) {
+            if (seen[b.id]) return;
+            seen[b.id] = 1;
+            b.img = util.firstImage(b.images);
+            b.icon = util.iconUrl(b.icon);
+            b.name = b.name || "匿名用户";
+            self.blogs.push(b);
+          });
+          self.current += 1;
+          // 不满一页 = 到底了
+          self.hasMore = list.length >= PAGE_SIZE;
+        })
+        .catch(function (e) {
+          self.hasMore = false;
+          self.$message.error(e);
+        })
+        .then(function () {
+          self.loading = false;
+          self.loaded = true;
+        });
+    },
+
+    toggleLike: function (b) {
+      var self = this;
+      axios.put("/blog/like/" + b.id)
+        .then(function () { return axios.get("/blog/" + b.id); })
+        .then(function (res) {
+          b.liked = res.data.liked;
+          b.isLike = res.data.isLike;
+        })
+        .catch(this.$message.error);
+    },
+
+    doSearch: function () {
+      var q = (this.keyword || "").trim();
+      if (!q) { this.$message.info("输入商户名再搜"); return; }
+      var r = this.region;
+      util.go("/shop-list.html?name=" + encodeURIComponent(q) +
+        "&province=" + encodeURIComponent(r.province) +
+        "&city=" + encodeURIComponent(r.city) +
+        "&district=" + encodeURIComponent(r.district));
+    },
+
+    toBlog: function (id) {
+      util.go("/blog-detail.html?id=" + id);
+    }
+  }
+});
+</script>
+</body>
+</html>

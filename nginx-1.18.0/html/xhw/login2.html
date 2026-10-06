@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>登录 · 小红碗</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/css/ticket.css">
+</head>
+<body>
+<!--
+  原来这里是一个「密码登录」表单，但后端 /user/login 只认
+  手机号 + 验证码（UserServiceImpl.login 直接比对 Redis 里的 login:code:）。
+  没有密码字段，也没有注册密码的接口，所以那个表单提交了必然报「验证码错误」。
+  页面上也没有别的地方再链到 login2.html，保留这个文件只是为了不让老链接 404。
+-->
+<div id="app">
+  <header class="hd">
+    <button class="hd__btn" type="button" @click="goBack" aria-label="返回">
+      <tk-icon name="back" :size="20"></tk-icon>
+    </button>
+    <h1 class="hd__t">登录</h1>
+    <span class="hd__spacer"></span>
+  </header>
+
+  <main class="main main--nofoot">
+    <div class="empty" style="padding-top:60px">
+      <div class="empty__ic"><tk-icon name="info" :size="24"></tk-icon></div>
+      <div class="empty__t">这里没有密码登录</div>
+      <div class="empty__d">后端只支持手机号 + 验证码。下面这一页就是。</div>
+      <div class="empty__act">
+        <a class="btn btn--p btn--sm" href="/login.html">去验证码登录</a>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/js/vue.js"></script>
+<script src="/js/axios.min.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/ui.js"></script>
+<script>
+new Vue({
+  el: "#app",
+  methods: {
+    goBack: function () { util.back(); }
+  }
+});
+</script>
+</body>
+</html>
